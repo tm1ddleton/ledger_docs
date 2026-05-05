@@ -54,6 +54,10 @@ The futures smart contract is stateless. Each invocation receives Product state,
 
 ### Unit State
 
+Unit state is compound: a liveliness component and a last-lifecycle-event marker, written together as e.g. `Active | EOD settled 2026-05-04`.
+
+Liveliness:
+
 | State      | Meaning                                                                                                            |
 |------------|--------------------------------------------------------------------------------------------------------------------|
 | `Active`   | Trading open; daily settlement ongoing                                                                              |
@@ -61,6 +65,15 @@ The futures smart contract is stateless. Each invocation receives Product state,
 | `Expired`  | All final settlement obligations discharged; futures units extinguished and (for cash settlement) final VM paid     |
 
 `Active → Matured` on contract expiry. `Matured → Expired` once all moves in the final settlement transaction reach `Settled`. CDM `closedState` is set at `Expired`.
+
+Last-lifecycle-event marker — examples for futures:
+
+| Marker                          | Set by                                                                       |
+|---------------------------------|------------------------------------------------------------------------------|
+| `EOD settled YYYY-MM-DD`        | A `DailySettlementEvent` for that business day                               |
+| `Final settlement YYYY-MM-DD`   | The expiry event (cash or physical)                                          |
+
+Per [invariant 10](../invariants.md#core-ledger-invariants), the smart contract checks the marker before generating moves. If a daily settlement price is re-fed for a date whose marker is already recorded, the smart contract returns a no-op rather than generating a second VM transaction.
 
 ### Position State
 

@@ -17,12 +17,14 @@ The smart contract is agnostic to whether the ledger persists these state object
 | Dimension          | Scope                                  | Describes                          | Examples                                                        |
 |--------------------|----------------------------------------|------------------------------------|-----------------------------------------------------------------|
 | **Product state**  | Per smart contract instance            | *What* the instrument is           | `expiry = 2026-01-10`, `strike = 100`, `underlying = AAPL`      |
-| **Unit state**     | Per unit, uniform across all holders   | *What stage of life* it is in      | `Active → Matured → Expired`; `barrier_knocked = true`          |
+| **Unit state**     | Per unit, uniform across all holders   | *What stage of life* it is in      | `Active \| Coupon paid 2016-10-01`; `barrier_knocked = true`     |
 | **Position state** | Per (unit, wallet, counterparty) tuple | *Who holds how much, and where in the settlement pipeline* | A counter map by settlement bucket (see below)  |
 
 Product state and Unit state are the parameter values and lifecycle flags of the instrument itself; neither depends on who holds the position. Position state is the per-holder view.
 
 **Product-specific shape.** The exact set of unit-state values and any extensions to position state are defined per smart contract. For example, an option carries a `barrier_knocked` flag in unit state; a futures contract carries a running `costBasis` scalar in position state in addition to the bucketed counters described below. See each `smart_contracts/*.md` document for its product-specific state schema.
+
+**Unit state is compound.** Unit state always carries two parts: a *liveliness* component (e.g. `Active`, `Matured`, `Expired`) plus optional contingent flags, and a *last-lifecycle-event marker* recording the most recent lifecycle event applied to the unit (e.g. `Coupon paid 2016-10-01`, `EOD settled 2026-05-04`, `Fixing observed 2026-05-04`). The marker is the mechanism by which the smart contract enforces idempotent event delivery (see [invariant 10](#core-ledger-invariants)).
 
 ### Position state: bucketed counters
 
@@ -70,6 +72,8 @@ Events that depend on holdings consult the relevant bucket of the position state
 8. **Two-tier settlement failure and balance exclusion**: A settlement failure notification does not by itself extinguish a trade's legal obligation. Move states therefore distinguish between a non-terminal failed attempt (`TransferStatusEnum.Pending` — the obligation persists and settlement will be retried) and a terminal outcome (`TransferStatusEnum.Failed` — the obligation has been definitively extinguished by mutual agreement or forced resolution such as a buy-in). `Failed` moves are excluded from all wallet balance calculations. Because `Failed` moves never contributed to a settled balance, no reversal transaction is needed when moves reach `Failed` state — the balance is automatically correct. The specific resolution paths — retry, bilateral cancellation, and buy-in — are documented per smart contract.
 
 9. **Wallet balance views**: Two balance views are derived from position state (see State Model). The **settled balance** (the CSD's view) counts only the `Settled` bucket. The **live balance** (the trade-date view consumed by risk, valuation, and operations) counts the `Settled` bucket plus all `Pending(date)` buckets. The `Failed` bucket is excluded from both views (per invariant 8). All downstream systems must specify which view they consume.
+
+10. **Idempotent event delivery**: Feeding the same event to a smart contract must be idempotent. Replaying an event (same event identifier and payload) against the same input states must produce no additional moves and must leave the returned states unchanged. Smart contracts enforce this by consulting the unit state's last-lifecycle-event marker before generating moves: if the event has already been recorded as applied, the smart contract returns a no-op. This protects against duplicate notifications from upstream feeds — for example, a fixing being republished must not generate the dependent coupon a second time, and a settlement price being re-fed must not produce a second daily VM transaction.
 
 ---
 
