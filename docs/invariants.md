@@ -75,6 +75,8 @@ Events that depend on holdings consult the relevant bucket of the position state
 
 10. **Idempotent event delivery**: Feeding the same event to a smart contract must be idempotent. Replaying an event (same event identifier and payload) against the same input states must produce no additional moves and must leave the returned states unchanged. Smart contracts enforce this by consulting the unit state's last-lifecycle-event marker before generating moves: if the event has already been recorded as applied, the smart contract returns a no-op. This protects against duplicate notifications from upstream feeds — for example, a fixing being republished must not generate the dependent coupon a second time, and a settlement price being re-fed must not produce a second daily VM transaction.
 
+11. **Booking model is exogenous to the smart contract**: How trades are routed across internal wallets — for example, whether a structured note is held in a single book or split across separate issuance and hedging books, or whether equity inventory sits with the trading desk that bought it or with a central inventory wallet — is a booking decision, not a smart contract responsibility. The smart contract is concerned only with the payoff (encoded in product state), the lifecycle events delivered by the [QRL](events.md) observation / event ladder, and the resulting moves between the wallets it is presented with. Documents in `smart_contracts/*.md` may describe representative booking patterns for clarity, but those patterns are not normative; the same smart contract must produce the same lifecycle moves regardless of the chosen booking structure.
+
 ---
 
 ## Exchange Trade Booking Model
