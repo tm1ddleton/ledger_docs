@@ -31,8 +31,8 @@ Futures are exchange-traded and follow the exchange trade booking model (see [Ex
 |----------------------|-----------------|--------------------------------------------------------------------------------------------------------------------|
 | Exchange / CCP       | Virtual wallet  | The CCP (e.g. CME, Eurex, ICE) acting as central counterparty to all positions post-clearing                       |
 | Exchange-Facing Book | Real wallet     | Single book per legal entity per exchange; holds the cleared net position as seen by the CCP                       |
-| Futures Desk Book    | Real wallet     | Individual desk or strategy book; holds allocated futures unit positions and associated VM cash flows              |
-| Clearing Broker      | Virtual wallet  | Where the desk clears through a broker (FCM) rather than directly, the broker intermediates between EFB and CCP    |
+| Internal Wallet      | Real wallet     | Internal book to which futures positions and VM cash flows are allocated (e.g. a desk or strategy book)            |
+| Clearing Broker      | Virtual wallet  | Where the entity clears through a broker (FCM) rather than directly, the broker intermediates between EFB and CCP  |
 
 For directly cleared members, the Exchange-Facing Book faces the CCP. For non-clearing members, the clearing broker's virtual wallet sits between the Exchange-Facing Book and the CCP. The economics are identical in both cases; only the settlement chain differs.
 
@@ -111,20 +111,20 @@ This single mechanic subsumes the previous distinction between "new trades refer
 
 The daily settlement cycle must simultaneously satisfy two requirements that operate at different levels of granularity.
 
-**Position-level P&L**: VM must be computed at the level of each (Futures Desk Book, futures contract) combination. This is the basis on which daily P&L is attributed to individual books and traders. Without this granularity, desk-level risk and return cannot be derived from the ledger.
+**Position-level P&L**: VM must be computed at the level of each (Internal Wallet, futures contract) combination. This is the basis on which daily P&L is attributed to individual internal wallets. Without this granularity, wallet-level risk and return cannot be derived from the ledger.
 
-**Single exchange payment**: The CCP faces the Exchange-Facing Book only. It calculates a single net VM amount per contract against the EFB's net position and calls or pays that as one cash flow. There is no mechanism for the CCP to direct VM to individual desk books.
+**Single exchange payment**: The CCP faces the Exchange-Facing Book only. It calculates a single net VM amount per contract against the EFB's net position and calls or pays that as one cash flow. There is no mechanism for the CCP to direct VM to individual internal wallets.
 
 The ledger satisfies both requirements through a **two-tier VM structure** created atomically within each `DailySettlementEvent`:
 
 | Tier | Move                    | Granularity                  | Initial State | Settlement Path           |
 |------|-------------------------|------------------------------|---------------|---------------------------|
-| 1    | Futures Desk Book ↔ EFB | Per (desk book, contract)    | `Settled`     | Internal entry; immediate |
+| 1    | Internal Wallet ↔ EFB | Per (internal wallet, contract)    | `Settled`     | Internal entry; immediate |
 | 2    | EFB ↔ CCP               | Single net per contract      | `Expected`    | External payment lifecycle |
 
-The EFB is flat on VM: the sum of all Tier 1 allocation moves across all desk books equals the Tier 2 external move in the opposite direction, satisfying the double-entry invariant. The EFB's net cash position from VM is zero after both tiers complete.
+The EFB is flat on VM: the sum of all Tier 1 allocation moves across all internal wallets equals the Tier 2 external move in the opposite direction, satisfying the double-entry invariant. The EFB's net cash position from VM is zero after both tiers complete.
 
-**Key design implication**: VM calculation granularity and VM settlement granularity are decoupled. If they were collapsed into a single move per desk book directly to the CCP, this would either require the CCP to be aware of internal desk allocation (which it is not) or would lose position-level P&L visibility. The two-tier structure is the minimum required to preserve both.
+**Key design implication**: VM calculation granularity and VM settlement granularity are decoupled. If they were collapsed into a single move per internal wallet directly to the CCP, this would either require the CCP to be aware of the entity's internal allocation (which it is not) or would lose position-level P&L visibility. The two-tier structure is the minimum required to preserve both.
 
 ---
 
@@ -134,12 +134,12 @@ The EFB is flat on VM: the sum of all Tier 1 allocation moves across all desk bo
 
 **Trigger**: Futures order filled on the exchange. Execution notification delivered to the smart contract.
 
-The smart contract creates a transaction recording the futures unit position. For a long trade the units move from the CCP to the desk; for a short trade the direction is reversed.
+The smart contract creates a transaction recording the futures unit position. For a long trade the units move from the CCP to the internal wallet; for a short trade the direction is reversed.
 
 | Move                 | From                         | To                           | Asset                                                   | State     |
 |----------------------|------------------------------|------------------------------|---------------------------------------------------------|-----------|
-| Long trade: units    | Exchange / CCP (virtual)     | Futures Desk Book (real)     | N futures units (contract, expiry month, trade reference) | `Settled` |
-| Short trade: units   | Futures Desk Book (real)     | Exchange / CCP (virtual)     | N futures units (contract, expiry month, trade reference) | `Settled` |
+| Long trade: units    | Exchange / CCP (virtual)     | Internal Wallet (real)     | N futures units (contract, expiry month, trade reference) | `Settled` |
+| Short trade: units   | Internal Wallet (real)     | Exchange / CCP (virtual)     | N futures units (contract, expiry month, trade reference) | `Settled` |
 
 Futures unit moves are recorded as `Settled` immediately — the position is live from execution. The position state is updated:
 
@@ -154,7 +154,7 @@ Multiple trades in the same contract on the same day each contribute their own p
 
 **Trigger**: Exchange publishes the official settlement price `S` at EOD.
 
-For each `(desk book, contract, CCP)` position with current `costBasis` and signed quantity `N`, the smart contract:
+For each `(internal wallet, contract, CCP)` position with current `costBasis` and signed quantity `N`, the smart contract:
 
 1. Computes the daily VM:
    ```
@@ -162,14 +162,14 @@ For each `(desk book, contract, CCP)` position with current `costBasis` and sign
    ```
 2. Creates VM moves in two tiers (see [VM Granularity and Settlement Netting](#vm-granularity-and-settlement-netting)):
 
-   **Tier 1 — Internal VM allocation** (one move per desk book, per contract):
+   **Tier 1 — Internal VM allocation** (one move per internal wallet, per contract):
 
    | Move                            | From                 | To                   | Asset                      | Initial State |
    |---------------------------------|----------------------|----------------------|----------------------------|---------------|
-   | Allocation (desk book receives) | Exchange-Facing Book | Futures Desk Book    | Cash (settlement currency) | `Settled`     |
-   | Allocation (desk book pays)     | Futures Desk Book    | Exchange-Facing Book | Cash (settlement currency) | `Settled`     |
+   | Allocation (internal wallet receives) | Exchange-Facing Book | Internal Wallet    | Cash (settlement currency) | `Settled`     |
+   | Allocation (internal wallet pays)     | Internal Wallet    | Exchange-Facing Book | Cash (settlement currency) | `Settled`     |
 
-   One direction applies per desk book, sized to that desk's `VM`. Internal moves settle immediately as accounting entries.
+   One direction applies per internal wallet, sized to that wallet's `VM`. Internal moves settle immediately as accounting entries.
 
    **Tier 2 — External settlement** (one move for the contract at EFB level):
 
@@ -178,9 +178,9 @@ For each `(desk book, contract, CCP)` position with current `costBasis` and sign
    | VM settlement (EFB receives)    | CCP (virtual)        | Exchange-Facing Book | Cash (settlement currency) | `Expected`    |
    | VM settlement (EFB pays)        | Exchange-Facing Book | CCP (virtual)        | Cash (settlement currency) | `Expected`    |
 
-   The Tier 2 amount equals the sum of all Tier 1 allocations across all desk books for the contract. One direction applies.
+   The Tier 2 amount equals the sum of all Tier 1 allocations across all internal wallets for the contract. One direction applies.
 
-3. Resets `costBasis ← S × multiplier × N` for each desk book's position.
+3. Resets `costBasis ← S × multiplier × N` for each internal wallet's position.
 
 The Tier 2 external VM move follows the standard payment state flow:
 ```
@@ -191,13 +191,13 @@ This single mechanic handles trade-date EOD, every subsequent business day, and 
 
 ### 3. Position Close / Partial Close
 
-**Trigger**: Desk executes an offsetting trade in the same futures contract.
+**Trigger**: An internal wallet executes an offsetting trade in the same futures contract.
 
 A closing trade is processed identically to any other trade: it adjusts `N` and `costBasis` per Trade Execution. At the next EOD, the Daily Settlement mechanic produces VM = `S × multiplier × N − costBasis`, which automatically incorporates the realised P&L on the closed leg.
 
 If `N` reaches zero and remains zero through EOD:
 - The EOD reset leaves `costBasis = S × multiplier × 0 = 0`.
-- The position is flat. Unit state remains `Active` until contract expiry; the desk simply has no exposure.
+- The position is flat. Unit state remains `Active` until contract expiry; the internal wallet simply has no exposure.
 
 If `N` is non-zero after a partial close, the remaining position carries a `costBasis` that reflects today's settlement price after the next EOD reset.
 
@@ -215,9 +215,9 @@ The futures units are extinguished and the final VM move is created:
 
 | Move                       | From                     | To                           | Asset                      | Initial State |
 |----------------------------|--------------------------|------------------------------|----------------------------|---------------|
-| Futures extinguishment     | Futures Desk Book        | Exchange / CCP (virtual)     | N futures units            | `Pending`     |
-| Final VM (desk receives)   | Exchange / CCP (virtual) | Futures Desk Book            | Cash (settlement currency) | `Expected`    |
-| Final VM (desk pays)       | Futures Desk Book        | Exchange / CCP (virtual)     | Cash (settlement currency) | `Expected`    |
+| Futures extinguishment     | Internal Wallet        | Exchange / CCP (virtual)     | N futures units            | `Pending`     |
+| Final VM (wallet receives) | Exchange / CCP (virtual) | Internal Wallet              | Cash (settlement currency) | `Expected`    |
+| Final VM (wallet pays)     | Internal Wallet          | Exchange / CCP (virtual)     | Cash (settlement currency) | `Expected`    |
 
 Unit state: `Active → Matured` when the final settlement transaction is created. `Matured → Expired` once all moves — extinguishment and final VM — have reached `Settled`.
 
@@ -254,9 +254,9 @@ QRL outputs are consumed at execution and stored as part of the trade record. Ch
 
 | Lifecycle Event                             | CDM Business Event Qualification             | CDM Transfer State              | Notes                                                                                  |
 |---------------------------------------------|----------------------------------------------|---------------------------------|----------------------------------------------------------------------------------------|
-| Trade execution (long)                      | `EventQualificationEnum.Execution`           | `TransferStatusEnum.Settled`    | Futures unit move CCP → Desk; updates `costBasis` and `N`                              |
-| Trade execution (short)                     | `EventQualificationEnum.Execution`           | `TransferStatusEnum.Settled`    | Futures unit move Desk → CCP; updates `costBasis` and `N`                              |
-| EOD settlement — Tier 1 internal allocation | CDM extension: `DailySettlementEvent`        | `TransferStatusEnum.Settled`    | Internal VM move per desk book (Desk ↔ EFB); settles immediately; position-level P&L recorded; `costBasis` reset |
+| Trade execution (long)                      | `EventQualificationEnum.Execution`           | `TransferStatusEnum.Settled`    | Futures unit move CCP → Internal Wallet; updates `costBasis` and `N`                   |
+| Trade execution (short)                     | `EventQualificationEnum.Execution`           | `TransferStatusEnum.Settled`    | Futures unit move Internal Wallet → CCP; updates `costBasis` and `N`                   |
+| EOD settlement — Tier 1 internal allocation | CDM extension: `DailySettlementEvent`        | `TransferStatusEnum.Settled`    | Internal VM move per internal wallet (Internal Wallet ↔ EFB); settles immediately; position-level P&L recorded; `costBasis` reset |
 | EOD settlement — Tier 2 external VM         | CDM extension: `DailySettlementEvent`        | `TransferStatusEnum.Expected`   | Net VM move at EFB level (EFB ↔ CCP); single amount per contract; equals sum of Tier 1 allocations |
 | VM payment instructed                       | — (state transition only)                    | `TransferStatusEnum.Instructed` | Tier 2 external move only; standard payment lifecycle                                  |
 | VM payment confirmed                        | — (state transition only)                    | `TransferStatusEnum.Settled`    | Tier 2 external move settles                                                           |
@@ -280,14 +280,14 @@ DailySettlementEvent:
   settlementDate          -- business day to which the settlement price applies
   settlementPrice         -- official settlement price published by the exchange (or EDSP at expiry)
 
-  -- Tier 1: internal allocation (one entry per desk book holding positions in this contract)
+  -- Tier 1: internal allocation (one entry per internal wallet holding positions in this contract)
   internalAllocations[]:
-    deskBook              -- the desk book being allocated
-    priorCostBasis        -- the desk book's costBasis prior to this event
-    quantity              -- the desk book's signed position size N
+    internalWallet              -- the internal wallet being allocated
+    priorCostBasis        -- the internal wallet's costBasis prior to this event
+    quantity              -- the internal wallet's signed position size N
     vm                    -- S × multiplier × N − priorCostBasis
     newCostBasis          -- S × multiplier × N (the post-event reset value)
-    allocationMove        -- the Settled internal cash move (Desk Book ↔ EFB)
+    allocationMove        -- the Settled internal cash move (Internal Wallet ↔ EFB)
 
   -- Tier 2: external settlement (single move at EFB level)
   externalVmMove          -- net of all internalAllocations[].vm; the Expected cash move (EFB ↔ CCP)
