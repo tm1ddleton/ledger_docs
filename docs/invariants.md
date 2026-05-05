@@ -6,19 +6,23 @@ These invariants hold for all smart contracts and all transactions recorded in t
 
 ## State Model
 
-Smart contracts are **stateless**. To evaluate a smart contract, three orthogonal state objects are passed in as inputs; the contract returns moves to be appended to the ledger and updated state objects.
+Smart contracts are **stateless**. To evaluate a smart contract, three orthogonal state objects are supplied as inputs; the contract returns moves to be appended to the ledger and updated state objects.
 
 ```
 SmartContract(productState, unitState, positionState) → moves, updated states
 ```
 
+The smart contract is agnostic to whether the ledger persists these state objects or recomputes them on demand from the move history — that is an implementation choice for the ledger.
+
 | Dimension          | Scope                                  | Describes                          | Examples                                                        |
 |--------------------|----------------------------------------|------------------------------------|-----------------------------------------------------------------|
 | **Product state**  | Per smart contract instance            | *What* the instrument is           | `expiry = 2026-01-10`, `strike = 100`, `underlying = AAPL`      |
-| **Unit state**     | Per unit, uniform across all holders   | *What stage of life* it is in      | `Active → Matured → Terminated`; `barrier_knocked = true`       |
+| **Unit state**     | Per unit, uniform across all holders   | *What stage of life* it is in      | `Active → Matured → Expired`; `barrier_knocked = true`          |
 | **Position state** | Per (unit, wallet, counterparty) tuple | *Who holds how much, and where in the settlement pipeline* | A counter map by settlement bucket (see below)  |
 
-Product state and Unit state are the parameter values and lifecycle flags of the instrument itself; neither depends on who holds the position. Position state is the per-holder view, derived from the ledger.
+Product state and Unit state are the parameter values and lifecycle flags of the instrument itself; neither depends on who holds the position. Position state is the per-holder view.
+
+**Product-specific shape.** The exact set of unit-state values and any extensions to position state are defined per smart contract. For example, an option carries a `barrier_knocked` flag in unit state; a futures contract carries a running `costBasis` scalar in position state in addition to the bucketed counters described below. See each `smart_contracts/*.md` document for its product-specific state schema.
 
 ### Position state: bucketed counters
 
