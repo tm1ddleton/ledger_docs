@@ -17,6 +17,7 @@
 - Virtual wallet: represents a set of holdings of an external entity that face the structured products business (e.g. a CSD)
 - Simulated wallet: represents simulated holdings (e.g. an index)
 - Unit: the representation of a given asset.  These can also be compound, based on other wallets (e.g. a total return swap could be written on a wallet in a simulated wallet that represents the constituents of an index).
+- Position: the aggregation of moves that share the same unit, wallet, and counterparty wallet.  Positions are derived from the ledger rather than stored, and are scoped to a specific (unit, wallet, counterparty wallet) tuple so that exposures facing different counterparties are not netted.
 
 ## Repo structure
 
