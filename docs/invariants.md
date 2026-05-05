@@ -4,6 +4,49 @@ These invariants hold for all smart contracts and all transactions recorded in t
 
 ---
 
+## State Model
+
+Smart contracts are **stateless**. To evaluate a smart contract, three orthogonal state objects are passed in as inputs; the contract returns moves to be appended to the ledger and updated state objects.
+
+```
+SmartContract(productState, unitState, positionState) → moves, updated states
+```
+
+| Dimension          | Scope                                  | Describes                          | Examples                                                        |
+|--------------------|----------------------------------------|------------------------------------|-----------------------------------------------------------------|
+| **Product state**  | Per smart contract instance            | *What* the instrument is           | `expiry = 2026-01-10`, `strike = 100`, `underlying = AAPL`      |
+| **Unit state**     | Per unit, uniform across all holders   | *What stage of life* it is in      | `Active → Matured → Terminated`; `barrier_knocked = true`       |
+| **Position state** | Per (unit, wallet, counterparty) tuple | *Who holds how much, and where in the settlement pipeline* | A counter map by settlement bucket (see below)  |
+
+Product state and Unit state are the parameter values and lifecycle flags of the instrument itself; neither depends on who holds the position. Position state is the per-holder view, derived from the ledger.
+
+### Position state: bucketed counters
+
+For each `(unit, wallet, counterparty wallet)` tuple, position state is a counter map keyed by settlement bucket:
+
+| Bucket          | Meaning                                                                                       |
+|-----------------|-----------------------------------------------------------------------------------------------|
+| `Settled`       | Quantity confirmed settled                                                                    |
+| `Pending(date)` | Quantity expected to settle on the given date; one sub-bucket per anticipated settlement date |
+| `Failed`        | Quantity for which a settlement attempt has terminally failed (per invariant 8)               |
+
+Example: `{ Settled: 100, Pending(T+1): 20, Pending(T+2): 10, Failed: 40 }`.
+
+### v1: optimistic, aggregated settlement
+
+In v1 there is no settlement-system feed, and many real-world settlements (e.g. cash equity CSD net settlement) cannot be tied back to individual moves. Therefore:
+
+- Per-move CDM settlement states (`Expected`, `Instructed`, `Pending`, `Settled`, `Failed`) are not tracked on individual moves; quantities are aggregated into the position-state buckets above.
+- On the anticipated settlement date, the system **optimistically** transitions `Pending(D) → Settled` without external confirmation.
+- Users may send reallocation messages between buckets to record exceptions (e.g. `Pending(T+1) → Failed`), subject to invariant 8.
+- The richer per-move CDM model remains the target end-state and the reference vocabulary in [events.md](events.md).
+
+### Implications for lifecycle events
+
+Events that depend on holdings consult the relevant bucket of the position state. For example, on a dividend record date, only the `Settled` bucket is eligible for the dividend; quantities still in `Pending(D)` on record date do not receive the dividend.
+
+---
+
 ## Core Ledger Invariants
 
 1. **Immutability**: Moves, once written to the ledger, are immutable. State transitions are recorded as new events that reference the original move; the original record is never modified or deleted.
@@ -22,7 +65,7 @@ These invariants hold for all smart contracts and all transactions recorded in t
 
 8. **Two-tier settlement failure and balance exclusion**: A settlement failure notification does not by itself extinguish a trade's legal obligation. Move states therefore distinguish between a non-terminal failed attempt (`TransferStatusEnum.Pending` — the obligation persists and settlement will be retried) and a terminal outcome (`TransferStatusEnum.Failed` — the obligation has been definitively extinguished by mutual agreement or forced resolution such as a buy-in). `Failed` moves are excluded from all wallet balance calculations. Because `Failed` moves never contributed to a settled balance, no reversal transaction is needed when moves reach `Failed` state — the balance is automatically correct. The specific resolution paths — retry, bilateral cancellation, and buy-in — are documented per smart contract.
 
-9. **Wallet balance views**: Two balance views are derived from the ledger. The **settled balance** (the CSD's view) counts only `Settled` moves. The **live balance** (the trade-date view consumed by risk, valuation, and operations) counts `Expected`, `Instructed`, `Pending`, and `Settled` moves. `Failed` moves are excluded from both views. `Expected` is a bespoke state used only for anticipated receipts where the amount is calculable before the payer has instructed (see [cash_payments.md](smart_contracts/cash_payments.md)); it has no direct CDM equivalent. All downstream systems must specify which view they consume.
+9. **Wallet balance views**: Two balance views are derived from position state (see State Model). The **settled balance** (the CSD's view) counts only the `Settled` bucket. The **live balance** (the trade-date view consumed by risk, valuation, and operations) counts the `Settled` bucket plus all `Pending(date)` buckets. The `Failed` bucket is excluded from both views (per invariant 8). All downstream systems must specify which view they consume.
 
 ---
 

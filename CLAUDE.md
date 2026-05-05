@@ -18,6 +18,10 @@
 - Simulated wallet: represents simulated holdings (e.g. an index)
 - Unit: the representation of a given asset.  These can also be compound, based on other wallets (e.g. a total return swap could be written on a wallet in a simulated wallet that represents the constituents of an index).
 - Position: the aggregation of moves that share the same unit, wallet, and counterparty wallet.  Positions are derived from the ledger rather than stored, and are scoped to a specific (unit, wallet, counterparty wallet) tuple so that exposures facing different counterparties are not netted.
+- Product state: the parameter values bound to a smart contract's terms for a specific instance (e.g. `expiry = 2026-01-10`, `strike = 100`, `underlying = AAPL`, `ccp = LCH`).  This is distinct from the contract's terms themselves (which describe the existence of an expiry date, a strike, a CCP, etc.); product state is the concrete values bound to those terms for this instance.
+- Unit state: the lifecycle and contingent state of a unit, uniform across all holders.  Examples: `Active → Matured → Terminated`; `barrier_knocked = true`.  A unit's state cannot differ by counterparty (e.g. a listed future cannot be `Active` for one party and `Matured` for another).
+- Position state: a counter map keyed by (unit, wallet, counterparty wallet) whose values are quantities split by settlement bucket — `Settled`, `Pending(date)` (one sub-bucket per anticipated settlement date), and `Failed`.  Position state is the v1 representation of move-level settlement state, aggregated up to the position grain (see [invariants.md](docs/invariants.md) State Model).
+- Stateless smart contract: smart contracts hold no internal state.  Each invocation receives Product state, Unit state, and Position state as inputs and returns moves to be appended to the ledger together with updated state objects.
 
 ## Repo structure
 

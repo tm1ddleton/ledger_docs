@@ -156,6 +156,8 @@ The CDM defines the following corporate action types for equities in `CorporateA
 
 Cash dividends are received by holders of direct equity positions. Derivative holders (e.g. equity option holders) do not receive dividends directly — the dividend is factored into derivative pricing at inception and through delta adjustments.
 
+**Eligibility**: Dividend eligibility is determined per position state (see [invariants.md](../invariants.md) State Model). Only quantities in the `Settled` bucket of the relevant `(unit, wallet, counterparty)` position on the record date are eligible. Quantities still in `Pending(D)` on the record date — e.g. shares purchased intraday on T but with anticipated settlement on T+2 falling after record date — do **not** receive the dividend; the seller, whose `Settled` balance has not yet been reduced, retains eligibility for those shares.
+
 **Ledger treatment**: On the ex-date an `Expected` move is booked per [cash_payments.md](cash_payments.md). On the payment date the move transitions through `Instructed → Settled`.
 
 | Move                | From                 | To                   | Asset                         | Initial State |
