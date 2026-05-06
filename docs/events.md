@@ -8,6 +8,23 @@ CDM qualifications use `EventQualificationEnum` values unless marked `†` (besp
 
 ---
 
+## QRL-Issued Events
+
+QRL is the observation / event ladder that drives smart contract invocations. Each smart contract subscribes to events relevant to its product state and is invoked when QRL emits one. The supported QRL event types are:
+
+| Event               | Purpose                                                                                                              |
+|---------------------|----------------------------------------------------------------------------------------------------------------------|
+| `BarrierMonitoring` | A scheduled or continuous-monitoring barrier observation date. Carries the observed reference level. Consumed by smart contracts with barrier features (equity options, structured products) to evaluate breach. |
+| `IndexObservation`  | A scheduled observation of an index, NAV, or basket level (e.g. autocall observation, QIS NAV computation, structured-product observation date). |
+| `StrikeObservation` | An observation that determines or fixes a strike (e.g. forward-start strike fixing, lookback strike determination, average-strike observation contributing to the strike calculation). |
+| `CashPayment`       | A scheduled cash-flow date (coupon, dividend record date, fixed leg payment, principal redemption). Triggers the smart contract to compute and book the cash move per [cash_payments.md](smart_contracts/cash_payments.md). |
+| `Termination`       | A scheduled or triggered contract-termination event (expiry, maturity, exercise, knock-out). Drives the unit-state liveliness transition `Active → Matured` and the creation of any final settlement transaction. |
+| `PhysicalDelivery`  | The settlement leg of a physically-settled contract (option exercise, futures physical delivery, structured-product share redemption). Triggers the smart contract to book the underlying delivery and any associated cash payment. |
+
+Per [invariant 10](invariants.md#core-ledger-invariants), each event is delivered idempotently: replays are no-ops by virtue of the unit state's last-lifecycle-event marker.
+
+---
+
 ## Contract Abbreviations
 
 | Abbr | Smart Contract                                                               |
