@@ -38,6 +38,10 @@ For each `(unit, wallet, counterparty wallet)` tuple, position state is a counte
 
 Example: `{ Settled: 100, Pending(T+1): 20, Pending(T+2): 10, Failed: 40 }`.
 
+### Why bucketed counters, not per-move state
+
+Aggregating settlement state into per-position counters is not only a v1 simplification — it is more truthful than the per-`Transfer` state model used by CDM whenever settlement is netted. A CSD that nets ten clips of ten shares each into a single delivery instruction and reports a 50-share fail does not, and cannot, tell us which of the ten underlying transfers failed. Recording a settlement state per individual transfer therefore requires the implementer to invent an allocation rule (FIFO, pro-rata, operational override) whose result is fictional with respect to the source data and will diverge between systems applying different rules. The counter model records exactly what the CSD said — `Failed` increments by 50 on the relevant `(unit, wallet, counterparty wallet)` position — and pushes per-clip attribution out of the canonical state and into a downstream reconciliation activity.
+
 ### v1: optimistic, aggregated settlement
 
 In v1 there is no settlement-system feed, and many real-world settlements (e.g. cash equity CSD net settlement) cannot be tied back to individual moves. Therefore:
