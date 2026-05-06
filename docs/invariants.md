@@ -17,14 +17,20 @@ The smart contract is agnostic to whether the ledger persists these state object
 | Dimension          | Scope                                  | Describes                          | Examples                                                        |
 |--------------------|----------------------------------------|------------------------------------|-----------------------------------------------------------------|
 | **Product state**  | Per smart contract instance            | *What* the instrument is           | `expiry = 2026-01-10`, `strike = 100`, `underlying = AAPL`      |
-| **Unit state**     | Per unit, uniform across all holders   | *What stage of life* it is in      | `Active \| Coupon paid 2016-10-01`; `barrier_knocked = true`     |
+| **Unit state**     | Per unit, uniform across all holders   | *What stage of life* it is in      | `Active \| Coupon paid 2016-10-01 \| CAs: [split 2018-06-01, split 2022-08-15]` |
 | **Position state** | Per (unit, wallet, counterparty) tuple | *Who holds how much, and where in the settlement pipeline* | A counter map by settlement bucket (see below)  |
 
 Product state and Unit state are the parameter values and lifecycle flags of the instrument itself; neither depends on who holds the position. Position state is the per-holder view.
 
 **Product-specific shape.** The exact set of unit-state values and any extensions to position state are defined per smart contract. For example, an option carries a `barrier_knocked` flag in unit state; a futures contract carries a running `costBasis` scalar in position state in addition to the bucketed counters described below. See each `smart_contracts/*.md` document for its product-specific state schema.
 
-**Unit state is compound.** Unit state always carries two parts: a *liveliness* component (e.g. `Active`, `Matured`, `Expired`) plus optional contingent flags, and a *last-lifecycle-event marker* recording the most recent lifecycle event applied to the unit (e.g. `Coupon paid 2016-10-01`, `EOD settled 2026-05-04`, `Fixing observed 2026-05-04`). The marker is the mechanism by which the smart contract enforces idempotent event delivery (see [invariant 10](#core-ledger-invariants)).
+**Unit state is compound.** Unit state always carries three parts:
+
+1. A *liveliness* component (e.g. `Active`, `Matured`, `Expired`) plus optional contingent flags (e.g. `barrier_knocked`).
+2. A *last-lifecycle-event marker* recording the most recent lifecycle event applied to the unit (e.g. `Coupon paid 2016-10-01`, `EOD settled 2026-05-04`, `Fixing observed 2026-05-04`). Because lifecycle events are scheduled upfront from inception and applied in a defined order, only the latest is retained.
+3. A *corporate actions applied* list recording every corporate action that has been applied to the unit (e.g. `[split 2018-06-01, scrip 2020-04-10, split 2022-08-15]`). Corporate actions are not generally known at inception, are order-independent across distinct events, and may be retroactively corrected — so the full history is retained rather than just the latest.
+
+Both the marker (for scheduled lifecycle events) and the CA list (for corporate actions) are mechanisms by which the smart contract enforces idempotent event delivery — see [invariant 10](#core-ledger-invariants).
 
 ### Position state: bucketed counters
 
@@ -77,7 +83,7 @@ Events that depend on holdings consult the relevant bucket of the position state
 
 9. **Wallet balance views**: Two balance views are derived from position state (see State Model). The **settled balance** (the CSD's view) counts only the `Settled` bucket. The **live balance** (the trade-date view consumed by risk, valuation, and operations) counts the `Settled` bucket plus all `Pending(date)` buckets. The `Failed` bucket is excluded from both views (per invariant 8). All downstream systems must specify which view they consume.
 
-10. **Idempotent event delivery**: Feeding the same event to a smart contract must be idempotent. Replaying an event (same event identifier and payload) against the same input states must produce no additional moves and must leave the returned states unchanged. Smart contracts enforce this by consulting the unit state's last-lifecycle-event marker before generating moves: if the event has already been recorded as applied, the smart contract returns a no-op. This protects against duplicate notifications from upstream feeds — for example, a fixing being republished must not generate the dependent coupon a second time, and a settlement price being re-fed must not produce a second daily VM transaction.
+10. **Idempotent event delivery**: Feeding the same event to a smart contract must be idempotent. Replaying an event (same event identifier and payload) against the same input states must produce no additional moves and must leave the returned states unchanged. Smart contracts enforce this by consulting the appropriate component of unit state before generating moves: the *last-lifecycle-event marker* for scheduled lifecycle events (coupon, fixing, EOD settlement, expiry, etc.), and the *corporate actions applied* list for corporate actions. If the event is already recorded as applied, the smart contract returns a no-op. Adjustments to a previously-applied corporate action are never in-place modifications of the existing state entry; they arrive as a separate event with its own identifier (typically a cancel/correct per [invariant 7](#core-ledger-invariants)) and append to the CA list as a new entry. This protects against duplicate notifications from upstream feeds (a fixing republished, a settlement price re-fed, a CA event re-delivered) without conflating them with deliberate corrections.
 
 11. **Booking model is exogenous to the smart contract**: How trades are routed across internal wallets — for example, whether a structured note is held in a single book or split across separate issuance and hedging books, or whether equity inventory sits with the trading desk that bought it or with a central inventory wallet — is a booking decision, not a smart contract responsibility. The smart contract is concerned only with the payoff (encoded in product state), the lifecycle events delivered by the [QRL](events.md) observation / event ladder, and the resulting moves between the wallets it is presented with. Documents in `smart_contracts/*.md` may describe representative booking patterns for clarity, but those patterns are not normative; the same smart contract must produce the same lifecycle moves regardless of the chosen booking structure.
 
@@ -121,6 +127,12 @@ The smart contract is mode-agnostic: it applies whichever value the resolution p
 | After ex-date      | A late override or correction is applied as a cancel/correct of the original CA transaction per [invariant 7](#core-ledger-invariants). There is no in-place modification of the applied transaction; the cancel/correct path preserves the audit trail. |
 
 Pre-ex-date override configuration arrives as a message from an upstream UI; the ledger accepts it and stores it against the relevant `(position, ISIN, ex-date, action-type)` key. Configuration is rejected once the ex-date orchestration has been posted.
+
+### Idempotency and adjustments
+
+CA application is idempotent per [invariant 10](#core-ledger-invariants), enforced via the *corporate actions applied* list on unit state (see [State Model](#state-model)). When a `CorporateAction` event is delivered, the smart contract checks the list for an entry matching the event's identifier; if present, the smart contract returns a no-op. On successful application, a new entry is appended to the list capturing the action type, ex-date, mode (`Automated` / `Override`), and a reference to the orchestrated transaction.
+
+Adjustments to a previously-applied corporate action — for example, a re-stated cash dividend amount, a corrected R-value, or a late position-level override — are **never** in-place edits of the existing CA list entry. They arrive as a separate `CorporateAction` event with its own identifier and append to the CA list as a new entry. The underlying ledger correction follows [invariant 7](#core-ledger-invariants): the original orchestrated transaction is reversed and a corrected transaction is posted, preserving the full audit trail. This keeps the unit state's CA history monotonic — entries are appended, never mutated — while accommodating retroactive corrections cleanly.
 
 ---
 
