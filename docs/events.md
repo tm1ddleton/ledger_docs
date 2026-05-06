@@ -20,6 +20,7 @@ QRL is the observation / event ladder that drives smart contract invocations. Ea
 | `CashPayment`       | A scheduled cash-flow date (coupon, dividend record date, fixed leg payment, principal redemption). Triggers the smart contract to compute and book the cash move per [cash_payments.md](smart_contracts/cash_payments.md). |
 | `Termination`       | A scheduled or triggered contract-termination event (expiry, maturity, exercise, knock-out). Drives the unit-state liveliness transition `Active → Matured` and the creation of any final settlement transaction. |
 | `PhysicalDelivery`  | The settlement leg of a physically-settled contract (option exercise, futures physical delivery, structured-product share redemption). Triggers the smart contract to book the underlying delivery and any associated cash payment. |
+| `CorporateAction`   | An ISIN-level corporate action ready for application. Payload carries the per-listing adjustment values (R-values, cash amounts, deliverable substitutions, withholding rates) and the action type (split, dividend, scrip, rights, spin-off, etc.). Triggers atomic application across all subscribed positions per [invariant 12](invariants.md#core-ledger-invariants) and the [Corporate Action Orchestration](invariants.md#corporate-action-orchestration) model. |
 
 Per [invariant 10](invariants.md#core-ledger-invariants), each event is delivered idempotently: replays are no-ops by virtue of the unit state's last-lifecycle-event marker.
 

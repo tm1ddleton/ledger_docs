@@ -127,6 +127,8 @@ CDM reference: [Event Model](https://cdm.finos.org/docs/event-model/) · [FINOS 
 
 ## Corporate Actions
 
+Application of corporate actions across all subscribed positions follows the [Corporate Action Orchestration](../invariants.md#corporate-action-orchestration) model in `invariants.md`: subscriptions are recorded at product creation; CA records are defined per listing; application is atomic across an ISIN per [invariant 12](../invariants.md#core-ledger-invariants); position-level overrides resolve per the Modes order before the ex-date, with a cancel/correct path post-ex-date. This section covers the equity-specific mechanics for each CA type.
+
 The CDM defines the following corporate action types for equities in `CorporateActionTypeEnum`. The authoritative source is the Rosetta enumeration file: [`event-common-enum.rosetta`](https://github.com/finos/common-domain-model/blob/master/rosetta-source/src/main/rosetta/event-common-enum.rosetta). CDM event model documentation: [https://cdm.finos.org/docs/event-model/](https://cdm.finos.org/docs/event-model/).
 
 | CDM Type | ISO 15022 Code | Description |
@@ -165,11 +167,23 @@ Cash dividends are received by holders of direct equity positions. Derivative ho
 | Dividend receipt    | CSD                  | Exchange-Facing Book | Cash (gross dividend amount)  | `Expected`    |
 | Dividend allocation | Exchange-Facing Book | Trader's Front Book  | Cash (net dividend after tax) | `Pending`     |
 
-**Dividend tax treatment**: Withholding tax and other dividend taxes are applied at two levels:
+**Dividend tax treatment**: The applicable withholding tax rate is resolved per dividend recipient at application time. The rate function is:
 
-1. **Wallet and jurisdiction level**: The applicable rate depends on the jurisdiction of incorporation of the issuing company and the legal entity status of the receiving wallet (e.g. domestic investor, non-resident, treaty-eligible entity). The net amount in the allocation move reflects the rate applicable to the receiving book.
+```
+rate = productInstanceOverride
+       ?? lookup(counterparty, issuerJurisdiction, counterpartyJurisdiction)
+```
 
-2. **Synthetic instruments and index products**: For instruments that do not directly hold the underlying equities but carry economic dividend exposure (e.g. total return swaps, structured products referencing a price-return index), withholding tax equivalent charges may apply. For synthetic instruments above a given delta threshold, withholding taxes on dividends may be levied as if the holder were a direct holder of the underlying shares. The applicable delta threshold and the resulting tax charge are instrument-specific and determined per applicable jurisdiction rules and the instrument terms. The composition of any index referenced by the instrument must also be considered — withholding rates may vary across the constituent equities by their individual jurisdictions.
+| Dimension                   | Description                                                                                      | Source                                  |
+|-----------------------------|--------------------------------------------------------------------------------------------------|-----------------------------------------|
+| `counterparty`              | The entity receiving the dividend (or whose synthetic exposure is being credited)                | Counterparty static data                |
+| `issuerJurisdiction`        | Jurisdiction of incorporation of the issuing company                                              | Issuer static data on the listing       |
+| `counterpartyJurisdiction`  | Tax residence of the counterparty (drives treaty status, domestic vs non-resident treatment)     | Counterparty static data                |
+| `productInstanceOverride`   | Optional per-product-instance override of the matrix-derived rate (e.g. a structured note with non-standard withholding terms) | Product state |
+
+The lookup is performed independently for each `(unit, wallet, counterparty wallet)` position eligible to receive the dividend; a single cash dividend on a single equity may therefore produce different net amounts for different counterparty wallets in the same orchestrated transaction. Each counterparty's allocation move uses its own resolved rate; gross dividend × (1 − rate) is the net amount paid to that counterparty.
+
+**Synthetic instruments and index products**: For instruments that do not directly hold the underlying equities but carry economic dividend exposure (e.g. total return swaps, structured products referencing a price-return index), withholding-tax equivalent charges may apply. For synthetic instruments above a given delta threshold, withholding may be levied as if the holder were a direct holder of the underlying shares. The applicable delta threshold and the resulting charge are instrument-specific and may be expressed as a `productInstanceOverride` on the synthetic product's state. For index-referencing instruments, the rate function is applied per constituent and aggregated, since withholding rates may vary across constituents by their individual issuer jurisdictions.
 
 ### Stock Split (SPLF), Reverse Stock Split (SPLR), and Scrip Dividend (DVSE)
 

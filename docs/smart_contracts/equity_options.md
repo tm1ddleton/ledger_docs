@@ -259,7 +259,7 @@ In-flight `Exercised`/`Assigned` quantities are unaffected by a subsequent KO â€
 
 ## Corporate Actions
 
-Corporate actions on the underlying equity may require adjustments to the option's product state. They do not generate cash moves on the option itself; they are state events on the option product state and are recorded via the marker `Corporate action YYYY-MM-DD`.
+Corporate actions on the underlying equity may require adjustments to the option's product state. Application follows the [Corporate Action Orchestration](../invariants.md#corporate-action-orchestration) model: the option subscribes to its underlying listing at inception; CA application is atomic across the ISIN per [invariant 12](../invariants.md#core-ledger-invariants); per-position overrides may be configured before the ex-date. CA events do not generate cash moves on the option itself; they are state events on the option product state and are recorded via the marker `Corporate action YYYY-MM-DD [mode]`.
 
 ### Quantity-Changing Actions (R-Value Adjustments)
 

@@ -81,6 +81,47 @@ Events that depend on holdings consult the relevant bucket of the position state
 
 11. **Booking model is exogenous to the smart contract**: How trades are routed across internal wallets — for example, whether a structured note is held in a single book or split across separate issuance and hedging books, or whether equity inventory sits with the trading desk that bought it or with a central inventory wallet — is a booking decision, not a smart contract responsibility. The smart contract is concerned only with the payoff (encoded in product state), the lifecycle events delivered by the [QRL](events.md) observation / event ladder, and the resulting moves between the wallets it is presented with. Documents in `smart_contracts/*.md` may describe representative booking patterns for clarity, but those patterns are not normative; the same smart contract must produce the same lifecycle moves regardless of the chosen booking structure.
 
+12. **Atomic corporate-action application across an ISIN**: All listing-level corporate-action records for the same `(ISIN, ex-date, action-type)` triple must apply within a single ledger transaction. Either every subscribed position sharing the ISIN is updated (with its position-level override or the automated value, per the [Corporate Action Orchestration](#corporate-action-orchestration) section) or none are. Partial application across positions is not permitted; failure of any per-position resolution rolls back the entire transaction, which is then resolved by reconfiguration (e.g. correcting an override) and re-applied.
+
+---
+
+## Corporate Action Orchestration
+
+Corporate actions on listed equities (and other underlyings that admit them) affect every product whose state references that underlying — direct equity holdings, option strike and multiplier, structured-product underlyings, QIS basket constituents. Application must be coordinated so that all affected products see a consistent state across the ledger.
+
+### Subscription
+
+Subscriptions to corporate actions are recorded at **product creation**. When a smart contract creates a product instance whose product state references a listing, the ledger records a subscription `(productInstance → listing)`. Subsequent corporate-action events on that listing are evaluated against every subscribed product instance.
+
+Products referencing multiple listings (e.g. a basket option, a QIS composite, a dual-listed underlying) record one subscription per referenced listing.
+
+### Definition vs application granularity
+
+| Layer         | Granularity                                                                                                                                                |
+|---------------|------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Definition    | **Per listing.** A single ISIN-level event (e.g. a stock split) may have multiple listing-level records — one per venue — capturing per-listing variations such as cash amounts after FX, ex-dates, withholding rules, and deliverable units. |
+| Application   | **Per ISIN, atomically** (per [invariant 12](#core-ledger-invariants)). All listing-level records for the same `(ISIN, ex-date, action-type)` triple apply within a single ledger transaction across every subscribed position. |
+| Override      | **Per position.** Overrides are keyed by `(unit, wallet, counterparty wallet)`. Since a position references a specific listing, overrides are implicitly listing-specific.                                                                |
+
+### Modes
+
+A `CorporateAction` event delivered by [QRL](events.md#qrl-issued-events) carries the per-listing adjustment values. For each affected position the smart contract resolves the value to apply in this order:
+
+1. **Override** — a position-level override registered before the ex-date (see Timing) supersedes the automated value for that position only.
+2. **Automated** — otherwise the QRL-computed adjustment is applied.
+
+The smart contract is mode-agnostic: it applies whichever value the resolution produces. The mode is recorded as provenance on the resulting moves and on the unit-state marker (e.g. `Corporate action 2026-04-12 [override:user-123]`).
+
+### Override timing
+
+| Stage              | Action                                                                                                                       |
+|--------------------|------------------------------------------------------------------------------------------------------------------------------|
+| Before ex-date     | Overrides may be configured against any subscribed position. Multiple positions in the same ISIN may carry overrides independently; positions without an override take the automated value. |
+| At ex-date         | The orchestrated CA transaction applies atomically across all subscribed positions, resolving each per the Modes order above. |
+| After ex-date      | A late override or correction is applied as a cancel/correct of the original CA transaction per [invariant 7](#core-ledger-invariants). There is no in-place modification of the applied transaction; the cancel/correct path preserves the audit trail. |
+
+Pre-ex-date override configuration arrives as a message from an upstream UI; the ledger accepts it and stores it against the relevant `(position, ISIN, ex-date, action-type)` key. Configuration is rejected once the ex-date orchestration has been posted.
+
 ---
 
 ## Exchange Trade Booking Model
