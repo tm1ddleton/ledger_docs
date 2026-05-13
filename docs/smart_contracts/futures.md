@@ -4,9 +4,7 @@
 
 A futures contract is a standardised, exchange-traded agreement to buy or sell an underlying asset at a specified price on a future delivery date. Unlike OTC derivatives, futures are centrally cleared through a Central Counterparty (CCP): the CCP novates to become the counterparty to all positions and guarantees settlement.
 
-The defining feature of futures is **daily mark-to-market settlement**: rather than accruing unrealised P&L, the CCP crystallises daily gains and losses as actual cash transfers (variation margin, VM). This creates the primary modelling challenge: on trade date T, VM is calculated using each trade's individual trade price as the reference; from T+1 onwards, VM is calculated using the previous day's official settlement price. Positions in the pre-settlement state cannot be aggregated and must be tracked individually; positions that have passed through at least one EOD settlement cycle can be collapsed into a single net position at a single reference price.
-
-This is the futures analogue of the `Pending`/`Settled` move distinction in the general ledger model: a trade that has not yet been through an EOD settlement cycle is like a `Pending` move that must be processed individually; once settled, it becomes part of the aggregated `Settled` position that is processed uniformly.
+The defining feature of futures is **daily mark-to-market settlement**: rather than accruing unrealised P&L, the CCP crystallises daily gains and losses as actual cash transfers (variation margin, VM). This crystallisation is captured in the ledger model through the **Position cost basis** (see [state.md](../state.md)): a scalar per (Futures Desk Book, futures Unit, CCP) that equals `Σ (price × quantity × multiplier)` across all trades contributing to the position. At EOD, VM is the difference between today's mark and the cost basis, and the cost basis is then reset to today's settlement mark. The next day's VM therefore measures only the day-on-day change in settlement price.
 
 Initial margin is out of scope (see [invariants.md](../invariants.md)).
 
@@ -40,48 +38,60 @@ For directly cleared members, the Exchange-Facing Book faces the CCP. For non-cl
 
 ---
 
-## Instrument State Model
+## State Model
 
-Futures positions carry two independent layers of state.
+Futures state follows the framework defined in [state.md](../state.md): Unit state (Product + liveness) is global to the contract; Position state is per (wallet, unit, counterparty).
 
-### Contract Lifecycle State
+### Unit State
 
-| State         | Meaning                                                                                                                    |
-|---------------|----------------------------------------------------------------------------------------------------------------------------|
-| `Active`      | Position is live; daily settlement is ongoing; the desk holds a non-zero net futures unit balance                          |
-| `Matured`     | Contract expiry date reached; final settlement transaction created but not yet fully settled                               |
-| `Terminated`  | All obligations discharged; futures units extinguished, final VM settled, and (for physical contracts) delivery completed  |
+The Product of a futures Unit is the contract specification published by the exchange: underlying, contract size / multiplier, expiry date, last trading date, settlement convention (cash or physical), and final-settlement-price methodology. The Product is set at contract listing and is immutable through the Unit's life.
 
-`Active → Matured` on contract expiry when the final settlement transaction is created. `Matured → Terminated` when all moves in the final settlement transaction have reached `Settled`. CDM `closedState` is set only at `Terminated` (see [equity_options.md](equity_options.md) CDM Extension 3 for the general `Matured` state pattern).
+Unit liveness uses the canonical three-state model:
 
-### Daily Settlement State
+| Liveness  | Meaning                                                                                                                       |
+|-----------|-------------------------------------------------------------------------------------------------------------------------------|
+| `Active`  | Contract is live; trading is permitted; daily settlement is ongoing.                                                          |
+| `Matured` | Contract expiry reached; the final settlement transaction has been created but not all moves have reached `Settled`.          |
+| `Expired` | All final settlement moves are `Settled`; the Unit is closed. CDM `closedState` is set at this point.                         |
 
-This state governs VM calculation and position aggregation. It is independent of the contract lifecycle state and applies only while the contract lifecycle state is `Active`.
+`Active → Matured` on contract expiry when the final settlement transaction is created. `Matured → Expired` once all moves in that transaction have reached `Settled` (see [equity_options.md](equity_options.md) CDM Extension 3 for the general `Matured` state pattern).
 
-| State             | VM Reference Price        | Aggregation                                          |
-|-------------------|---------------------------|------------------------------------------------------|
-| `NewTrade`        | Individual trade price    | Must be tracked per trade; not aggregable            |
-| `RunningPosition` | Last official settlement price | Fully aggregable into a single net position at the settlement price |
+### Position State
 
-The transition `NewTrade → RunningPosition` occurs at the EOD settlement event on trade date T. After this transition, the original trade price is no longer referenced in daily VM calculations: the settlement price becomes the sole reference. All `RunningPosition` units in the same contract can be treated as a single net position at the settlement price.
+A futures Position is keyed by (Futures Desk Book, futures Unit, CCP). It carries two scalars and no bucket vector:
+
+| Element            | Value                                                                                                                                                                                  |
+|--------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `quantity`         | Net number of futures units held. Signed: long positive, short negative.                                                                                                               |
+| `totalCostBasis`   | `Σ (price_i × quantity_i × multiplier)` over all trades contributing to the current position. Reset every EOD to `settlement_price × quantity × multiplier` once VM has been computed. |
+
+The settlement-cycle bucket vector defined in [state.md](../state.md) is degenerate for futures: every futures unit move is written `Settled` at execution per the [Exchange Trade Booking Model](../invariants.md#exchange-trade-booking-model). All quantity sits in `SettledPrior` from the moment of execution. The economic exposure is captured entirely by the cost basis and the running settlement-price reference.
+
+The Position state evolves through three drivers:
+
+1. **Trade execution**: a new trade adds `(n_i, trade_price_i × n_i × multiplier)` to `(quantity, totalCostBasis)`. The trade may be in either direction; signs are preserved.
+2. **EOD settlement**: `Daily VM = settlement_price × quantity × multiplier − totalCostBasis` is computed and paid; `totalCostBasis` is reset to `settlement_price × quantity × multiplier`.
+3. **Expiry**: the final settlement price is treated as the EOD price on the last trading day; the final VM is computed and paid, the units are extinguished, and (for physical contracts) delivery moves are created.
+
+This single mechanism subsumes the trade-date and post-trade-date VM cases under one formula. There is no separate per-move state distinguishing newly executed trades from carried positions; the running cost basis carries everything required to compute the next VM.
 
 ---
 
 ## Daily Settlement Mechanics
 
-The CCP calculates and calls VM at EOD each business day based on the official settlement price published by the exchange. The VM formula depends on the daily settlement state of the position:
+The CCP calculates and calls VM at EOD each business day based on the official settlement price published by the exchange. The VM formula is uniform across trade-day and subsequent-day positions:
 
-| Position State    | VM Formula                                                                           |
-|-------------------|--------------------------------------------------------------------------------------|
-| `NewTrade`        | `VM = (Settlement_T − Trade_Price) × Contract_Size × N_contracts`                   |
-| `RunningPosition` | `VM = (Settlement_D − Settlement_{D−1}) × Contract_Size × N_net`                    |
+```
+Daily VM = (Settlement_D × quantity × multiplier) − totalCostBasis
+```
 
-For a mixed day (new trades and a carried position co-exist), both calculations are performed independently and the results netted into a single VM cash move. After EOD:
+After VM is paid:
 
-- All `NewTrade` units transition to `RunningPosition`.
-- All `RunningPosition` units in the same contract can be treated as a single net position at the day's settlement price.
+```
+totalCostBasis ← Settlement_D × quantity × multiplier
+```
 
-This prevents trade-price information from propagating into subsequent days: once in `RunningPosition` state, all carried positions share a common reference and are treated uniformly.
+For a position carried from the prior day with no new trades, `totalCostBasis` was set yesterday to `Settlement_{D−1} × quantity × multiplier`, so the formula reduces to the familiar `(Settlement_D − Settlement_{D−1}) × quantity × multiplier`. For a position established by new trades during the day, `totalCostBasis` equals `Σ (trade_price_i × n_i × multiplier)`, so the formula reduces to `Σ (Settlement_D − trade_price_i) × n_i × multiplier`. The mixed-day case (a carried position plus new trades) is handled by the same formula without special casing — the cost basis additions accumulate during the day and the single EOD computation yields the correct VM.
 
 ---
 
@@ -89,16 +99,16 @@ This prevents trade-price information from propagating into subsequent days: onc
 
 The daily settlement cycle must simultaneously satisfy two requirements that operate at different levels of granularity.
 
-**Position-level P&L**: VM must be computed at the level of each (Futures Desk Book, futures contract) combination, and within that at `NewTrade` vs. `RunningPosition` position granularity. This is the basis on which daily P&L is attributed to individual books and traders. Without this granularity, desk-level risk and return cannot be derived from the ledger.
+**Position-level P&L**: VM must be computed at the level of each (Futures Desk Book, futures Unit) Position so that daily P&L can be attributed to individual books and traders. Without this granularity, desk-level risk and return cannot be derived from the ledger.
 
 **Single exchange payment**: The CCP faces the Exchange-Facing Book only. It calculates a single net VM amount per contract against the EFB's net position and calls or pays that as one cash flow. There is no mechanism for the CCP to direct VM to individual desk books.
 
 The ledger satisfies both requirements through a **two-tier VM structure** created atomically within each `DailySettlementEvent`:
 
-| Tier | Move                   | Granularity                                   | Initial State | Settlement Path           |
-|------|------------------------|-----------------------------------------------|---------------|---------------------------|
-| 1    | Futures Desk Book ↔ EFB | Per (desk book, contract, NewTrade/Running)  | `Settled`     | Internal entry; immediate |
-| 2    | EFB ↔ CCP              | Single net per contract                       | `Expected`    | External payment lifecycle |
+| Tier | Move                    | Granularity                   | Initial State | Settlement Path            |
+|------|-------------------------|-------------------------------|---------------|----------------------------|
+| 1    | Futures Desk Book ↔ EFB | Per (desk book, futures Unit) | `Settled`     | Internal entry; immediate  |
+| 2    | EFB ↔ CCP               | Single net per futures Unit   | `Expected`    | External payment lifecycle |
 
 The EFB is flat on VM: the sum of all Tier 1 allocation moves across all desk books equals the Tier 2 external move in the opposite direction, satisfying the double-entry invariant. The EFB's net cash position from VM is zero after both tiers complete.
 
@@ -112,120 +122,86 @@ The EFB is flat on VM: the sum of all Tier 1 allocation moves across all desk bo
 
 **Trigger**: Futures order filled on the exchange. Execution notification delivered to the smart contract.
 
-The smart contract creates a transaction recording the futures unit position. For a long trade the units move from the CCP to the desk; for a short trade the direction is reversed.
+The smart contract creates a transaction recording the futures unit move. For a long trade the units move from the CCP to the desk; for a short trade the direction is reversed.
 
-| Move                 | From                         | To                           | Asset                                                         | State     |
-|----------------------|------------------------------|------------------------------|---------------------------------------------------------------|-----------|
-| Long trade: units    | Exchange / CCP (virtual)     | Futures Desk Book (real)     | N futures units (contract, expiry month, trade price, trade reference) | `Settled` |
-| Short trade: units   | Futures Desk Book (real)     | Exchange / CCP (virtual)     | N futures units (contract, expiry month, trade price, trade reference) | `Settled` |
+| Move                 | From                         | To                           | Asset                                                            | State     |
+|----------------------|------------------------------|------------------------------|------------------------------------------------------------------|-----------|
+| Long trade: units    | Exchange / CCP (virtual)     | Futures Desk Book (real)     | N futures units (contract, expiry month, trade price, trade ref) | `Settled` |
+| Short trade: units   | Futures Desk Book (real)     | Exchange / CCP (virtual)     | N futures units (contract, expiry month, trade price, trade ref) | `Settled` |
 
-Futures unit moves are recorded as `Settled` immediately — the position is live from execution. The daily settlement state of the newly created units is `NewTrade`: they carry their individual trade price and are not yet part of the settled position aggregate.
+Futures unit moves are recorded as `Settled` immediately — the position is live from execution. The Position state is updated:
 
-Multiple trades in the same contract on the same day each create separate futures unit moves with their own trade prices. They remain individually identified in `NewTrade` state until the EOD settlement cycle.
+```
+quantity        ← quantity + n         (signed; long positive, short negative)
+totalCostBasis  ← totalCostBasis + trade_price × n × multiplier
+```
 
-No premium or upfront cash payment is created at execution. All P&L exposure is carried through daily VM.
+Multiple trades in the same Unit on the same day each contribute their own `(n_i, trade_price_i × n_i × multiplier)` term. The Position requires no per-trade state record beyond what is already recorded on the ledger move itself.
 
-### 2. EOD Settlement — First Cycle (Trade Date T)
+No premium or upfront cash payment is created at execution. All P&L exposure is carried through the daily VM cycle.
 
-**Trigger**: Exchange publishes the official settlement price at EOD on trade date T.
+### 2. EOD Settlement
 
-For all futures unit moves in `NewTrade` state, the smart contract:
+**Trigger**: Exchange publishes the official settlement price at EOD.
 
-1. Calculates VM for each `NewTrade` position:
+For each (Futures Desk Book, futures Unit) Position with non-zero quantity or non-zero cost basis, the smart contract:
+
+1. Computes Daily VM:
    ```
-   VM_i = (Settlement_T − Trade_Price_i) × Contract_Size × N_i
+   Daily VM = Settlement_D × quantity × multiplier − totalCostBasis
    ```
-2. Creates VM moves in two tiers (see [VM Granularity and Settlement Netting](#vm-granularity-and-settlement-netting)):
+2. Creates the two-tier VM moves (see [VM Granularity and Settlement Netting](#vm-granularity-and-settlement-netting)).
 
-   **Tier 1 — Internal VM allocation** (one move per desk book, per contract):
+   **Tier 1 — Internal VM allocation** (one move per desk book, per futures Unit):
 
-   | Move                           | From                 | To                   | Asset                      | Initial State |
-   |--------------------------------|----------------------|----------------------|----------------------------|---------------|
+   | Move                            | From                 | To                   | Asset                      | Initial State |
+   |---------------------------------|----------------------|----------------------|----------------------------|---------------|
    | Allocation (desk book receives) | Exchange-Facing Book | Futures Desk Book    | Cash (settlement currency) | `Settled`     |
-   | Allocation (desk book pays)    | Futures Desk Book    | Exchange-Facing Book | Cash (settlement currency) | `Settled`     |
+   | Allocation (desk book pays)     | Futures Desk Book    | Exchange-Facing Book | Cash (settlement currency) | `Settled`     |
 
-   Each desk book's allocation is the net VM across all its `NewTrade` positions for the contract: `Σ (Settlement_T − Trade_Price_i) × Contract_Size × N_i`. One direction applies per desk book. Internal moves settle immediately as accounting entries.
+   Each desk book's allocation equals the Daily VM for its Position in the Unit. One direction applies per desk book. Internal moves settle immediately as accounting entries.
 
-   **Tier 2 — External settlement** (one move for the contract at EFB level):
+   **Tier 2 — External settlement** (one move per futures Unit at EFB level):
 
-   | Move                           | From                 | To                   | Asset                      | Initial State |
-   |--------------------------------|----------------------|----------------------|----------------------------|---------------|
-   | VM settlement (EFB receives)   | CCP (virtual)        | Exchange-Facing Book | Cash (settlement currency) | `Expected`    |
-   | VM settlement (EFB pays)       | Exchange-Facing Book | CCP (virtual)        | Cash (settlement currency) | `Expected`    |
+   | Move                            | From                 | To                   | Asset                      | Initial State |
+   |---------------------------------|----------------------|----------------------|----------------------------|---------------|
+   | VM settlement (EFB receives)    | CCP (virtual)        | Exchange-Facing Book | Cash (settlement currency) | `Expected`    |
+   | VM settlement (EFB pays)        | Exchange-Facing Book | CCP (virtual)        | Cash (settlement currency) | `Expected`    |
 
-   The Tier 2 amount equals the sum of all Tier 1 allocations across all desk books. One direction applies.
+   The Tier 2 amount equals the sum of all Tier 1 allocations across all desk books for the Unit. One direction applies.
 
-3. Transitions all `NewTrade` units to `RunningPosition` state, with `Settlement_T` as the new reference price.
-4. All `RunningPosition` units in the same contract can be treated as a single net position at reference price `Settlement_T`.
+3. Resets the cost basis on each affected Position:
+   ```
+   totalCostBasis ← Settlement_D × quantity × multiplier
+   ```
 
 The Tier 2 external VM move follows the standard payment state flow:
 ```
 Expected → Pending → Instructed → Settled
 ```
 
-After this event, no `NewTrade` units remain for trade date T. Each desk book's position can be expressed as a net of `N_net` contracts at reference price `Settlement_T`.
+After this event, every Position in the Unit is marked at `Settlement_D` and ready for the next day's cycle. Whether the Position contains trades executed today, a position carried from yesterday, or a mixture of both is immaterial — the single formula and the cost-basis reset handle all cases.
 
-### 3. Daily Variation Margin (T+1 Onwards)
+### 3. Position Close / Partial Close
 
-**Trigger**: Exchange publishes the official settlement price at EOD on each subsequent business day.
+**Trigger**: Desk executes an offsetting trade in the same futures Unit.
 
-For positions in `RunningPosition` state, VM is uniform across the entire net position:
+A closing trade is a new trade in the opposite direction. The smart contract creates the offsetting futures unit move at `Settled` and updates the Position per [Trade Execution](#1-trade-execution): `quantity` moves toward zero, `totalCostBasis` is reduced by `closing_price × n_close × multiplier` (signs preserved).
 
-```
-VM = (Settlement_D − Settlement_{D−1}) × Contract_Size × N_net
-```
+At EOD the standard mechanism applies: a single Daily VM is computed against the updated cost basis and the cost basis is reset.
 
-**Tier 1 — Internal VM allocation** (one move per desk book):
+If the position reaches `quantity = 0` after a full close and the position is closed before expiry, the Unit's liveness state is unaffected for other holders — the desk simply has zero exposure to the Unit. The cost basis at EOD will be `0` once the close trade is included (mark of zero quantity is zero) and the Daily VM will reflect the realised P&L.
 
-| Move                           | From                 | To                   | Asset                      | Initial State |
-|--------------------------------|----------------------|----------------------|----------------------------|---------------|
-| Allocation (desk book receives) | Exchange-Facing Book | Futures Desk Book    | Cash (settlement currency) | `Settled`     |
-| Allocation (desk book pays)    | Futures Desk Book    | Exchange-Facing Book | Cash (settlement currency) | `Settled`     |
+If the position is non-zero after a partial close, the remaining position continues with the updated `(quantity, totalCostBasis)`.
 
-**Tier 2 — External settlement** (one move at EFB level):
-
-| Move                           | From                 | To                   | Asset                      | Initial State |
-|--------------------------------|----------------------|----------------------|----------------------------|---------------|
-| VM settlement (EFB receives)   | CCP (virtual)        | Exchange-Facing Book | Cash (settlement currency) | `Expected`    |
-| VM settlement (EFB pays)       | Exchange-Facing Book | CCP (virtual)        | Cash (settlement currency) | `Expected`    |
-
-The reference price is updated to `Settlement_D` after each daily settlement event. The cycle repeats each business day until the position is closed or the contract expires.
-
-### 4. Mixed Day (New Trades and Running Position)
-
-If the desk executes new trades on a day when it already holds a `RunningPosition`:
-
-- **Existing position** (`RunningPosition`): VM referenced to `Settlement_{D−1}`.
-- **New trades** (`NewTrade`): VM referenced to individual trade prices.
-
-Both VM components are calculated independently per desk book. The two-tier VM structure applies as in section 2: one Tier 1 internal allocation per desk book (covering both components) and one Tier 2 external settlement at the EFB level. After EOD, new trades transition `NewTrade → RunningPosition` and the net position can be re-aggregated at today's settlement price.
-
-### 5. Position Close / Partial Close
-
-**Trigger**: Desk executes an offsetting trade in the same futures contract.
-
-A closing trade is a new trade in the opposite direction. The smart contract creates the offsetting futures unit move in `NewTrade` state with its own closing trade price.
-
-At EOD:
-
-- The closing `NewTrade` units and the existing `RunningPosition` are processed together per section 4.
-- VM is calculated on both components separately and netted.
-- After EOD the net position can be treated as a single net position in `RunningPosition` state.
-
-If the net position reaches zero after the closing trade settles through EOD:
-- Contract lifecycle state: `Active → Matured` once the final VM move is created.
-- `Matured → Terminated` once the final VM move reaches `Settled`.
-
-If the net position is non-zero after a partial close, the remaining position continues in `RunningPosition` state.
-
-### 6. Expiry — Cash Settlement
+### 4. Expiry — Cash Settlement
 
 **Trigger**: Contract expiry. The exchange publishes the final settlement price (e.g. special opening quotation for equity index futures). No further trading is permitted.
 
-The final VM is calculated against the carried `RunningPosition` using the final settlement price as the closing reference:
+The final VM is computed against the Position using the final settlement price as today's mark:
 
 ```
-Final VM = (Final Settlement Price − Settlement_{last trading day}) × Contract_Size × N_net
+Final VM = Final Settlement Price × quantity × multiplier − totalCostBasis
 ```
 
 The futures units are extinguished and the final VM move is created:
@@ -236,19 +212,21 @@ The futures units are extinguished and the final VM move is created:
 | Final VM (desk receives)   | Exchange / CCP (virtual) | Futures Desk Book            | Cash (settlement currency) | `Expected`    |
 | Final VM (desk pays)       | Futures Desk Book        | Exchange / CCP (virtual)     | Cash (settlement currency) | `Expected`    |
 
-Contract lifecycle state: `Active → Matured` when the final settlement transaction is created. `Matured → Terminated` once all moves — extinguishment and final VM — have reached `Settled`.
+After extinguishment, `quantity = 0` and `totalCostBasis = 0` on the Position.
 
-### 7. Expiry — Physical Delivery
+Unit liveness: `Active → Matured` when the final settlement transaction is created. `Matured → Expired` once all moves — extinguishment and final VM — have reached `Settled`.
+
+### 5. Expiry — Physical Delivery
 
 For physically deliverable futures (e.g. single-stock futures, bond futures), expiry triggers delivery of the underlying rather than a cash-only final settlement.
 
 At expiry:
 
 - The futures unit is extinguished as in the cash settlement path.
-- Additional delivery moves are created representing the exchange of the underlying and the delivery price cash payment, following the settlement model of the applicable underlying smart contract (see [equities.md](equities.md), [bonds.md](bonds.md)).
-- Final VM on the last trading day is calculated and settled as in the cash settlement path.
+- Additional delivery moves are created representing the exchange of the underlying and the delivery price cash payment, following the settlement model of the applicable underlying smart contract (see [equities.md](equities.md), [bonds.md](bonds.md)). These delivery moves run through the standard settlement-bucket cycle defined in [state.md](../state.md).
+- Final VM on the last trading day is computed and settled as in the cash settlement path.
 
-Contract lifecycle state follows the same `Active → Matured → Terminated` path: `Matured` when the final settlement transaction (including delivery moves) is created; `Terminated` when all moves have settled.
+Unit liveness follows the same `Active → Matured → Expired` path: `Matured` when the final settlement transaction (including delivery moves) is created; `Expired` when all moves have settled.
 
 ---
 
@@ -258,8 +236,8 @@ QRL generates the following for futures contracts:
 
 | QRL Output              | Description                                                                                                       |
 |-------------------------|-------------------------------------------------------------------------------------------------------------------|
-| Contract expiry date    | The final settlement date; the date on which the final settlement price is applied and positions are extinguished  |
-| Last trading date       | For contracts where the last trading day precedes the final settlement date (e.g. most interest rate futures)      |
+| Contract expiry date    | The final settlement date; the date on which the final settlement price is applied and positions are extinguished |
+| Last trading date       | For contracts where the last trading day precedes the final settlement date (e.g. most interest rate futures)     |
 | Settlement price basis  | The method by which the final settlement price is determined (e.g. special opening quotation, closing auction)    |
 | EOD settlement calendar | The exchange business day calendar governing which days generate VM calculations and settlement price observations |
 
@@ -269,35 +247,39 @@ QRL outputs are consumed at execution and stored as part of the trade record. Ch
 
 ## CDM Event Representation
 
-| Lifecycle Event                   | CDM Business Event Qualification             | CDM Transfer State              | Notes                                                                               |
-|-----------------------------------|----------------------------------------------|---------------------------------|-------------------------------------------------------------------------------------|
-| Trade execution (long)            | `EventQualificationEnum.Execution`           | `TransferStatusEnum.Settled`    | Futures unit move CCP → Desk; daily settlement state: `NewTrade`                    |
-| Trade execution (short)           | `EventQualificationEnum.Execution`           | `TransferStatusEnum.Settled`    | Futures unit move Desk → CCP; daily settlement state: `NewTrade`                    |
-| EOD settlement — Tier 1 internal allocation | CDM extension: `DailySettlementEvent` | `TransferStatusEnum.Settled`    | Internal VM move per desk book (Desk ↔ EFB); settles immediately; position-level P&L recorded; `NewTrade → RunningPosition` |
-| EOD settlement — Tier 2 external VM         | CDM extension: `DailySettlementEvent` | `TransferStatusEnum.Expected`   | Net VM move at EFB level (EFB ↔ CCP); single amount per contract; equals sum of Tier 1 allocations |
-| VM payment instructed             | — (state transition only)                    | `TransferStatusEnum.Instructed` | Tier 2 external move only; standard payment lifecycle                               |
-| VM payment confirmed              | — (state transition only)                    | `TransferStatusEnum.Settled`    | Tier 2 external move settles                                                        |
-| Position close — offsetting trade | `EventQualificationEnum.Execution`           | `TransferStatusEnum.Settled`    | Offsetting futures unit move; `NewTrade` state until EOD; net collapses at EOD      |
-| Expiry — final settlement created | `EventQualificationEnum.ContractTermination` | `TransferStatusEnum.Pending`    | Extinguishment + final VM moves; lifecycle state: `Active → Matured`                |
-| Expiry — fully settled            | — (state transition only)                    | `TransferStatusEnum.Settled`    | All final moves settled; lifecycle state: `Matured → Terminated`; CDM `closedState` set |
+| Lifecycle Event                             | CDM Business Event Qualification             | CDM Transfer State              | Notes                                                                               |
+|---------------------------------------------|----------------------------------------------|---------------------------------|-------------------------------------------------------------------------------------|
+| Trade execution (long)                      | `EventQualificationEnum.Execution`           | `TransferStatusEnum.Settled`    | Futures unit move CCP → Desk; Position `(quantity, totalCostBasis)` updated         |
+| Trade execution (short)                     | `EventQualificationEnum.Execution`           | `TransferStatusEnum.Settled`    | Futures unit move Desk → CCP; Position `(quantity, totalCostBasis)` updated         |
+| EOD settlement — Tier 1 internal allocation | CDM extension: `DailySettlementEvent`        | `TransferStatusEnum.Settled`    | Internal VM move per desk book (Desk ↔ EFB); position-level P&L recorded            |
+| EOD settlement — Tier 2 external VM         | CDM extension: `DailySettlementEvent`        | `TransferStatusEnum.Expected`   | Net VM move at EFB level (EFB ↔ CCP); equals sum of Tier 1 allocations              |
+| EOD settlement — cost basis reset           | CDM extension: `DailySettlementEvent`        | — (Position state update)       | `totalCostBasis ← Settlement_D × quantity × multiplier` on every affected Position  |
+| VM payment instructed                       | — (state transition only)                    | `TransferStatusEnum.Instructed` | Tier 2 external move only; standard payment lifecycle                               |
+| VM payment confirmed                        | — (state transition only)                    | `TransferStatusEnum.Settled`    | Tier 2 external move settles                                                        |
+| Position close — offsetting trade           | `EventQualificationEnum.Execution`           | `TransferStatusEnum.Settled`    | Offsetting futures unit move; Position updated as a normal trade                    |
+| Expiry — final settlement created           | `EventQualificationEnum.ContractTermination` | `TransferStatusEnum.Pending`    | Extinguishment + final VM moves; Unit liveness: `Active → Matured`                  |
+| Expiry — fully settled                      | — (state transition only)                    | `TransferStatusEnum.Settled`    | All final moves settled; Unit liveness: `Matured → Expired`; CDM `closedState` set  |
 
 ---
 
 ## CDM Extensions
 
-CDM covers exchange-traded futures via `FuturesPayout` within a `TradeState`. However, CDM has no native representation of the T vs. post-T settlement state distinction or the EOD settlement cycle as a first-class lifecycle event. The following extensions are required.
+CDM covers exchange-traded futures via `FuturesPayout` within a `TradeState`. However, CDM has no native representation of the Position cost-basis state or the EOD settlement cycle as a first-class lifecycle event. The following extensions are required.
 
-### Extension 1: `FuturesDailySettlementStateEnum`
+### Extension 1: `FuturesPositionState`
 
-CDM has no concept of whether a futures unit has been through its first EOD settlement cycle. This extension carries that state.
+CDM has no concept of a Position-level cost basis. This extension carries the per-(desk book, futures Unit, CCP) Position state used to drive VM calculation.
 
 ```
-FuturesDailySettlementStateEnum:
-  NewTrade          -- opened on the current settlement day; VM reference is trade price; not yet aggregable
-  RunningPosition   -- through at least one EOD settlement cycle; VM reference is last settlement price; fully aggregable
+FuturesPositionState:
+  deskBook            -- the Futures Desk Book (real wallet)
+  futuresUnit         -- the futures Unit (contract, expiry month)
+  counterparty        -- the CCP (fixed for cleared futures)
+  quantity            -- signed net number of futures units held
+  totalCostBasis      -- Σ (price × quantity × multiplier) over contributing trades
 ```
 
-Carried as a bespoke field on the `TradeState` of each futures position move. Transitions from `NewTrade` to `RunningPosition` atomically within the `DailySettlementEvent`.
+The Position state is derived from the ledger: `quantity` from the net of all `Settled` futures unit moves into and out of the desk book for the Unit; `totalCostBasis` from the prices recorded on those moves combined with the EOD reset events. The extension provides an explicit representation of this derived state for consumption by VM calculation logic.
 
 ### Extension 2: `DailySettlementEvent`
 
@@ -305,23 +287,21 @@ CDM's `EventQualificationEnum` has no entry for the futures EOD settlement cycle
 
 ```
 DailySettlementEvent:
-  contractReference       -- exchange, instrument, and expiry month identifying the futures contract
+  contractReference       -- exchange, instrument, and expiry month identifying the futures Unit
   settlementDate          -- business day to which the settlement price applies
   settlementPrice         -- official settlement price published by the exchange
 
-  -- Tier 1: internal allocation (one entry per desk book holding positions in this contract)
+  -- Tier 1: internal allocation (one entry per desk book holding Positions in this Unit)
   internalAllocations[]:
     deskBook              -- the desk book being allocated
-    newTradeVm            -- VM on NewTrade positions for this desk book (reference: trade prices)
-    runningPositionVm     -- VM on RunningPosition for this desk book (reference: prior settlement price)
-    netAllocation         -- total VM attributed to this desk book (newTradeVm + runningPositionVm)
+    priorCostBasis        -- totalCostBasis on the Position immediately before this event
+    quantity              -- signed net quantity on the Position
+    dailyVm               -- settlementPrice × quantity × multiplier − priorCostBasis
     allocationMove        -- the Settled internal cash move (Desk Book ↔ EFB)
+    resetCostBasis        -- settlementPrice × quantity × multiplier (new totalCostBasis after reset)
 
   -- Tier 2: external settlement (single move at EFB level)
-  externalVmMove          -- net of all netAllocation amounts; the Expected cash move (EFB ↔ CCP)
-
-  referenceTransition     -- records the NewTrade → RunningPosition transition for all positions processed
-  updatedReferencePrice   -- new reference price for subsequent daily VM calculations
+  externalVmMove          -- net of all dailyVm amounts; the Expected cash move (EFB ↔ CCP)
 ```
 
-The `DailySettlementEvent` records the daily settlement state transitions and the two-tier VM cash structure. It is triggered by the exchange's publication of the official settlement price.
+The `DailySettlementEvent` records both the VM cash structure and the cost-basis reset applied to each affected Position. It is triggered by the exchange's publication of the official settlement price.
