@@ -40,7 +40,7 @@ A **Product** is the subset of Unit state that defines the payout and other term
 | Structured note       | Full term sheet: principal, observation schedule, payoff function, autocall barriers, coupon mechanics.                                      |
 | OTC IRS               | Notional, fixed/floating leg conventions, day-count, fixing schedule, payment dates, calculation agent.                                      |
 
-The Product is set at Unit creation and is immutable under normal lifecycle. It changes only via the cancel-and-correct amendment pattern (see [invariant 7](invariants.md#core-ledger-invariants)).
+The Product is versioned and stored bi-temporally. The product may change as a consequence of a corporate action (e.g. strike or multiplier change owing to a corporate action), or a misbooking.
 
 ### Unit Liveness
 
