@@ -34,7 +34,7 @@ A smart contract's **terms** are encoded in the contract logic itself: a futures
 | Structured note       | Full term sheet: principal, observation schedule, payoff function, autocall barriers, coupon mechanics.                                       |
 | OTC IRS               | Notional, fixed/floating leg conventions, day-count, fixing schedule, payment dates, calculation agent.                                       |
 
-Product state is set at unit creation and is immutable under normal lifecycle. It changes only via the cancel-and-correct amendment pattern (see [invariant 7](invariants.md#core-ledger-invariants)).
+Product state is versioned and stored bi-temporally, so the product as bound at any historical time is recoverable. It changes through two routes only: (a) a **corporate action** that revises the product terms — for example a stock split that changes the strike or multiplier of an option — appended to the unit's corporate-actions-applied list (see [Corporate Actions Applied](#corporate-actions-applied)); and (b) **correction of a misbooking**, applied via the cancel-and-correct amendment pattern (see [invariant 7](invariants.md#core-ledger-invariants)). In both cases a new version is written; the prior version remains queryable.
 
 ---
 
@@ -209,7 +209,7 @@ The ledger is canonical; all three state objects are derivable from it.
 
 | State element                | Derivation                                                                                                                                                      |
 |------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Product state                | Set at unit creation; updated only through the cancel-and-correct amendment pattern.                                                                            |
+| Product state                | Bound at unit creation; versioned bi-temporally. Updated by (a) corporate-action events appended to the unit's CA list, or (b) cancel-and-correct corrections of misbookings.       |
 | Liveliness                   | Set at unit creation as `Active`; advanced by lifecycle events recorded as transactions on the ledger.                                                          |
 | Last-lifecycle-event marker  | Updated each time a scheduled lifecycle event is recorded against the unit; reflects only the most recent event by reference.                                   |
 | Corporate-actions applied    | Appended each time a corporate-action transaction is recorded against the unit; entries reference the transaction(s) that implemented the action.               |
