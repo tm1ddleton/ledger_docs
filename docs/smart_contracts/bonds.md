@@ -31,7 +31,7 @@ Callable and putable features may coexist on the same instrument (a callable put
 |-------|-------------|-------------|
 | Exchange | Virtual wallet | Represents the exchange or CCP as counterparty for exchange-traded bonds |
 | Exchange-Facing Book | Real wallet | Single book per legal entity per exchange venue (applicable to exchange-traded bonds only; see [Exchange Trade Booking Model](../invariants.md#exchange-trade-booking-model)) |
-| Trader's Front Book | Real wallet | Individual desk or strategy book to which the bond position is allocated |
+| Internal Wallet | Real wallet | Individual desk or strategy book to which the bond position is allocated |
 | OTC Counterparty | Virtual wallet | The bilateral counterparty for OTC-traded bonds; faces the desk book directly |
 | CSD | Virtual wallet | Central Securities Depository; effects DvP settlement and coupon cash distributions |
 | Issuer / Paying Agent | Virtual wallet | Represents the bond issuer or its appointed paying agent; source of coupon and principal payments at the CSD |
@@ -98,12 +98,12 @@ The booking model for exchange-traded bonds follows the exchange trade booking m
 | Bond delivery | Exchange (virtual wallet) | Exchange-Facing Book | Bond units (face value × quantity, security identifier) | `Instructed` |
 | Cash payment | Exchange-Facing Book | Exchange (virtual wallet) | Cash (dirty price: clean consideration + accrued interest) | `Instructed` |
 
-#### Leg 2 — Internal: Exchange-Facing Book ↔ Trader's Front Book
+#### Leg 2 — Internal: Exchange-Facing Book ↔ Internal Wallet
 
 | Move | From | To | Asset | Initial State |
 |------|------|----|-------|---------------|
-| Bond allocation | Exchange-Facing Book | Trader's Front Book | Bond units | `Instructed` |
-| Cash allocation | Trader's Front Book | Exchange-Facing Book | Cash (dirty price) | `Instructed` |
+| Bond allocation | Exchange-Facing Book | Internal Wallet | Bond units | `Instructed` |
+| Cash allocation | Internal Wallet | Exchange-Facing Book | Cash (dirty price) | `Instructed` |
 
 The initial state is `Instructed` for the same reason as equities: CSD settlement instructions are generated automatically by the exchange mechanism, and the instruction is already in flight by the time the trade notification reaches the smart contract.
 
@@ -117,8 +117,8 @@ For OTC bonds, there is no exchange-facing book. The desk book faces the OTC cou
 
 | Move | From | To | Asset | Initial State |
 |------|------|----|-------|---------------|
-| Bond delivery | OTC Counterparty (virtual wallet) | Trader's Front Book | Bond units | `Pending` |
-| Cash payment | Trader's Front Book | OTC Counterparty (virtual wallet) | Cash (dirty price) | `Pending` |
+| Bond delivery | OTC Counterparty (virtual wallet) | Internal Wallet | Bond units | `Pending` |
+| Cash payment | Internal Wallet | OTC Counterparty (virtual wallet) | Cash (dirty price) | `Pending` |
 
 The initial state is `Pending` (not `Instructed`) for OTC bonds: there is no automated instruction generation. Settlement instructions are prepared manually or by the operations team and submitted separately to the CSD. The state transitions to `Instructed` when the CSD instruction is confirmed as submitted.
 
@@ -153,7 +153,7 @@ For settlement failure resolution paths (retry, bilateral cancellation, buy-in),
 
 ### 1. Position Acquisition
 
-Position acquisition is the point at which the smart contract first recognises a bond position in the Trader's Front Book. This is typically the trade execution event described above, but also applies to bonds acquired by internal transfer, new issue subscription, or receipt as collateral.
+Position acquisition is the point at which the smart contract first recognises a bond position in the Internal Wallet. This is typically the trade execution event described above, but also applies to bonds acquired by internal transfer, new issue subscription, or receipt as collateral.
 
 On position acquisition:
 1. The settlement transaction is created (per [Trade Execution and Settlement](#trade-execution-and-settlement) above).
@@ -168,14 +168,14 @@ In parallel with the ledger booking, the settlement system submits the DvP instr
 
 **Trigger**: Position acquisition (steps above). QRL has returned the full coupon schedule.
 
-**Action**: The smart contract pre-generates one `Expected` coupon receipt move per scheduled coupon date, for the Trader's Front Book, in a single batch transaction. For zero coupon bonds, no coupon moves are created (there are none to schedule).
+**Action**: The smart contract pre-generates one `Expected` coupon receipt move per scheduled coupon date, for the Internal Wallet, in a single batch transaction. For zero coupon bonds, no coupon moves are created (there are none to schedule).
 
 Each `Expected` coupon move:
 
 | Move | From | To | Asset | State |
 |------|------|----|-------|-------|
 | Coupon receipt | CSD (virtual wallet) | Exchange-Facing Book | Cash (calculated coupon amount, currency) | `Expected` |
-| Internal allocation | Exchange-Facing Book | Trader's Front Book | Cash (same amount) | `Pending` |
+| Internal allocation | Exchange-Facing Book | Internal Wallet | Cash (same amount) | `Pending` |
 
 For **fixed rate bonds**: the coupon amount is fully calculable at inception (face value × fixed rate × day count fraction). All `Expected` moves are created with their definitive amount.
 
@@ -225,7 +225,7 @@ Coupon payment proceeds in three steps, following the same CSD cash distribution
 Expected → Instructed
 ```
 
-The internal allocation move to the Trader's Front Book remains `Pending` — the cash has not yet arrived.
+The internal allocation move to the Internal Wallet remains `Pending` — the cash has not yet arrived.
 
 #### Step 2 — CSD Coupon Credit
 
@@ -264,13 +264,13 @@ Maturity is a DvP event: bond units are returned to the issuer (via the CSD) and
 
 | Move | From | To | Asset | Initial State |
 |------|------|----|-------|---------------|
-| Bond units return | Trader's Front Book | CSD (virtual wallet) | Bond units (full holding at par) | `Instructed` |
+| Bond units return | Internal Wallet | CSD (virtual wallet) | Bond units (full holding at par) | `Instructed` |
 | Principal receipt | CSD (virtual wallet) | Exchange-Facing Book | Cash (face value of holding) | `Expected` |
-| Internal allocation | Exchange-Facing Book | Trader's Front Book | Cash (face value) | `Pending` |
+| Internal allocation | Exchange-Facing Book | Internal Wallet | Cash (face value) | `Pending` |
 
 The bond units move and the principal receipt move are created in the same atomic transaction per [invariant 2](../invariants.md#core-ledger-invariants). The bond units move is initially `Instructed` because the CSD redemption instruction is generated automatically by the paying agent on maturity date. The principal receipt follows the `Expected` → `Instructed` → `Settled` flow as the payment is advised and then credited.
 
-Bond position state: `Active → Matured` on maturity date when the redemption transaction is created; `Matured → Terminated` when all moves in the transaction (bond unit return, principal receipt, internal allocation) have reached `Settled`. After termination the Trader's Front Book carries zero bond units and has received the principal cash.
+Bond position state: `Active → Matured` on maturity date when the redemption transaction is created; `Matured → Terminated` when all moves in the transaction (bond unit return, principal receipt, internal allocation) have reached `Settled`. After termination the Internal Wallet carries zero bond units and has received the principal cash.
 
 #### Cancellation of Remaining Expected Coupon Moves
 
@@ -294,9 +294,9 @@ On the call date, the same structure as maturity applies:
 
 | Move | From | To | Asset | Initial State |
 |------|------|----|-------|---------------|
-| Bond units return | Trader's Front Book | CSD (virtual wallet) | Bond units (full holding) | `Instructed` |
+| Bond units return | Internal Wallet | CSD (virtual wallet) | Bond units (full holding) | `Instructed` |
 | Redemption receipt | CSD (virtual wallet) | Exchange-Facing Book | Cash (redemption price × face value, including any call premium) | `Expected` |
-| Internal allocation | Exchange-Facing Book | Trader's Front Book | Cash (redemption amount) | `Pending` |
+| Internal allocation | Exchange-Facing Book | Internal Wallet | Cash (redemption amount) | `Pending` |
 
 All remaining scheduled coupon moves that have not yet reached `Settled` (other than any final coupon included in the redemption) are cancelled to `Failed` on the call date, consistent with the maturity treatment.
 
@@ -304,7 +304,7 @@ All remaining scheduled coupon moves that have not yet reached `Settled` (other 
 
 ### 8. Early Redemption — Put (Holder-Initiated)
 
-**Trigger**: The holder (Trader's Front Book) elects to exercise the put option within the notification window returned by QRL. The put election is communicated to the issuer via the operations team.
+**Trigger**: The holder (Internal Wallet) elects to exercise the put option within the notification window returned by QRL. The put election is communicated to the issuer via the operations team.
 
 The ledger structure on the put date is identical to the call event described above, with the redemption price being the contractual put price (typically par). The distinction is only in who initiates the event; the resulting ledger moves are the same.
 
@@ -320,9 +320,9 @@ Conversion extinguishes the bond position and creates an equity position. This i
 
 | Move | From | To | Asset | Initial State |
 |------|------|----|-------|---------------|
-| Bond units extinguished | Trader's Front Book | CSD (virtual wallet) | Bond units (converted face value) | `Instructed` |
+| Bond units extinguished | Internal Wallet | CSD (virtual wallet) | Bond units (converted face value) | `Instructed` |
 | Equity units created | CSD (virtual wallet) | Exchange-Facing Book | Equity units (face value × conversion ratio) | `Instructed` |
-| Equity allocation | Exchange-Facing Book | Trader's Front Book | Equity units | `Instructed` |
+| Equity allocation | Exchange-Facing Book | Internal Wallet | Equity units | `Instructed` |
 | Fractional cash (if any) | CSD (virtual wallet) | Exchange-Facing Book | Cash (fractional share cash settlement) | `Expected` |
 
 The equity units received follow the full equity lifecycle from this point, including eligibility for dividends and corporate actions. See [equities.md](equities.md) for the governing lifecycle.
@@ -348,8 +348,8 @@ The settlement transaction for a sale mirrors the purchase, with from and to wal
 
 | Move | From | To | Asset | Initial State |
 |------|------|----|-------|---------------|
-| Bond deallocation | Trader's Front Book | Exchange-Facing Book | Bond units | `Instructed` |
-| Cash credit | Exchange-Facing Book | Trader's Front Book | Cash (dirty price) | `Instructed` |
+| Bond deallocation | Internal Wallet | Exchange-Facing Book | Bond units | `Instructed` |
+| Cash credit | Exchange-Facing Book | Internal Wallet | Cash (dirty price) | `Instructed` |
 
 For OTC sales, the single-leg structure applies with `Pending` as the initial state, as for OTC purchases.
 
@@ -419,7 +419,7 @@ In the event of issuer default:
 1. All remaining `Expected` coupon moves that have not yet reached `Settled` transition to `Failed`. These moves are excluded from all balance views. No reversal is required.
 2. Any `Instructed` coupon moves (pre-advice received but not yet credited) also transition to `Failed` unless the CSD confirms the credit will proceed (i.e. the paying agent has already transferred funds to the CSD).
 3. The principal repayment move, if already scheduled (i.e. on or after maturity date), transitions to `Failed`.
-4. The bond units in the Trader's Front Book remain in `Settled` state until a recovery event or write-off instruction is processed. Recovery proceedings (claims in administration, debt restructuring, distressed exchange) are out of scope for the ledger. The ledger will reflect the outcomes of those proceedings only when a formal instruction is received (e.g. a debt-for-equity swap would generate a conversion transaction; a write-off would generate a units extinguishment transaction).
+4. The bond units in the Internal Wallet remain in `Settled` state until a recovery event or write-off instruction is processed. Recovery proceedings (claims in administration, debt restructuring, distressed exchange) are out of scope for the ledger. The ledger will reflect the outcomes of those proceedings only when a formal instruction is received (e.g. a debt-for-equity swap would generate a conversion transaction; a write-off would generate a units extinguishment transaction).
 
 ---
 

@@ -22,7 +22,7 @@ Examples include: equity dividends received from the CSD, coupon income, funding
 |-------|-------------|-------------|
 | CSD | Virtual wallet | The Central Securities Depository; source of CSD-originated cash distributions (dividends, corporate action proceeds) |
 | Exchange-Facing Book | Real wallet | Single book per legal entity (see [Exchange Trade Booking Model](../invariants.md#exchange-trade-booking-model)); receives CSD cash distributions and holds the internal cash position |
-| Trader's Front Book | Real wallet | Individual desk or strategy book; receives internally-allocated cash after CSD receipt |
+| Internal Wallet | Real wallet | Individual desk or strategy book; receives internally-allocated cash after CSD receipt |
 | External Counterparty | Virtual wallet | Any third-party receiving or originating a standalone cash payment (e.g. a prime broker, fee recipient, funding counterparty) |
 
 ---
@@ -112,7 +112,7 @@ The equity dividend is used as the canonical example; the same pattern applies t
 
 **Trigger**: Ex-dividend date. The stock begins trading without the dividend entitlement. The mark-to-market value of the equity position drops by approximately the dividend amount.
 
-**Why this date matters**: If the trader's book shows a mark-to-market loss from the price drop but no offsetting income, P&L will show a spurious loss on ex-date that unwinds weeks later when the cash arrives. To prevent this, the internal allocation to the trader's front book must be booked as a `Pending` move on ex-date — visible in the live balance from the same moment the price drops.
+**Why this date matters**: If the trader's book shows a mark-to-market loss from the price drop but no offsetting income, P&L will show a spurious loss on ex-date that unwinds weeks later when the cash arrives. To prevent this, the internal allocation to the internal wallet must be booked as a `Pending` move on ex-date — visible in the live balance from the same moment the price drops.
 
 **Action**: The smart contract calculates the expected dividend:
 `dividend per share × confirmed holdings at record date`
@@ -122,9 +122,9 @@ A single balanced transaction is created containing both moves:
 | Move | From | To | Asset | State |
 |------|------|----|-------|-------|
 | Dividend receipt | CSD (virtual wallet) | Exchange-Facing Book | Cash (calculated amount, currency) | `Expected` |
-| Internal allocation | Exchange-Facing Book | Trader's Front Book | Cash (same amount) | `Pending` |
+| Internal allocation | Exchange-Facing Book | Internal Wallet | Cash (same amount) | `Pending` |
 
-Both moves are created atomically. The transaction is balanced: the exchange-facing book nets to flat on the live balance (one `Expected` inbound, one `Pending` outbound). The trader's front book shows a `Pending` cash inflow that offsets the mark-to-market equity loss.
+Both moves are created atomically. The transaction is balanced: the exchange-facing book nets to flat on the live balance (one `Expected` inbound, one `Pending` outbound). The internal wallet shows a `Pending` cash inflow that offsets the mark-to-market equity loss.
 
 Where multiple desks hold the same security, the allocation is split across their front books in proportion to their record-date holdings. All allocation moves are part of the same transaction and must sum to the total CSD receipt.
 

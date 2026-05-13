@@ -17,11 +17,17 @@
 - Virtual wallet: represents a set of holdings of an external entity that face the structured products business (e.g. a CSD)
 - Simulated wallet: represents simulated holdings (e.g. an index)
 - Unit: the representation of a given asset.  These can also be compound, based on other wallets (e.g. a total return swap could be written on a wallet in a simulated wallet that represents the constituents of an index).
+- Position: the aggregation of moves that share the same (unit, wallet, counterparty wallet) tuple.  Exposures facing different counterparties are not netted.  See [state.md](docs/state.md) for the full definition.
+- Product state: the parameter values bound to a smart contract's terms for a specific instance (e.g. `expiry = 2026-01-10`, `strike = 100`, `underlying = AAPL`).  Distinct from the contract's terms themselves.  See [state.md](docs/state.md).
+- Unit state: the lifecycle and contingent state of a unit, uniform across all holders.  Compound with three parts — liveliness, last-lifecycle-event marker, corporate-actions-applied list — written together as e.g. `Active | Coupon paid 2026-10-01 | CAs: [split 2022-08-15]`.  See [state.md](docs/state.md).
+- Position state: a per-(unit, wallet, counterparty wallet) counter map keyed by settlement bucket — `Settled`, `Pending(date)`, `Failed` — optionally extended by product-specific fields (e.g. the futures cost basis scalar).  See [state.md](docs/state.md).
+- Stateless smart contract: smart contracts hold no internal state.  Each invocation receives Product, Unit, and Position state as inputs and returns moves to be appended to the ledger together with updated state objects.  See [state.md](docs/state.md).
 
 ## Repo structure
 
 docs/ => all the documents in this repo
 docs/invariants.md => invariants that are true for all smart contracts
+docs/state.md => canonical reference for the three-dimensional (Product / Unit / Position) state model used by every smart contract
 docs/events.md => a list of events, their representation in CDM, and the a cross reference of the smart contracts that they apply to
 docs/smart_contracts/ => a document per smart contract that describes the lifecycle events that apply to each smart contract
 docs/smart_contracts/equities.md => cash equities

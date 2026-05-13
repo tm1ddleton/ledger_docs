@@ -14,8 +14,16 @@ The smart contract governs the booking and lifecycle of equity trades from execu
 |-------|-------------|-------------|
 | Exchange | Virtual wallet | Represents the exchange or CCP as counterparty to the trade |
 | Exchange-Facing Book | Real wallet | Single book per legal entity that faces the exchange (see [Exchange Trade Booking Model invariant](../invariants.md#exchange-trade-booking-model)) |
-| Trader's Front Book | Real wallet | Individual trader or desk book to which the position is allocated |
+| Internal Wallet | Real wallet | Individual trader or desk book to which the position is allocated |
 | CSD | Virtual wallet | Represents the Central Securities Depository; the exchange-facing book's settlement agent |
+
+---
+
+## Settlement State
+
+Settlement state is held on the **position**, not on individual moves, per the [State Model](../state.md). Moves within a `(unit, wallet, counterparty wallet)` position are treated as fungible; the canonical record of where quantity sits in the settlement cycle is the position-state bucket. CDM `TransferStatusEnum` values remain useful event vocabulary for inbound and outbound feeds but are not stamped on individual moves.
+
+For equities in most markets the cycle is T+1: on trade date T the affected quantity sits in `Pending(T+1)` of the relevant position and transitions to `Settled` on the value date.
 
 ---
 
@@ -29,44 +37,38 @@ The smart contract creates a single **Transaction** containing two simultaneous,
 
 #### Leg 1 — External: Exchange ↔ Exchange-Facing Book
 
-| Move | From | To | Asset | Initial CDM State |
-|------|------|----|-------|-------------------|
-| Equity delivery | Exchange (virtual wallet) | Exchange-Facing Book | Equity units (quantity × security identifier) | `TransferStatusEnum.Instructed` |
-| Cash payment | Exchange-Facing Book | Exchange (virtual wallet) | Cash (trade consideration: price × quantity) | `TransferStatusEnum.Instructed` |
+| Move            | From                      | To                    | Asset                                          |
+|-----------------|---------------------------|-----------------------|------------------------------------------------|
+| Equity delivery | Exchange (virtual wallet) | Exchange-Facing Book  | Equity units (quantity × security identifier)  |
+| Cash payment    | Exchange-Facing Book      | Exchange (virtual)    | Cash (trade consideration: price × quantity)    |
 
-#### Leg 2 — Internal: Exchange-Facing Book ↔ Trader's Front Book
+#### Leg 2 — Internal: Exchange-Facing Book ↔ Internal Wallet
 
-| Move | From | To | Asset | Initial CDM State |
-|------|------|----|-------|-------------------|
-| Equity allocation | Exchange-Facing Book | Trader's Front Book | Equity units | `TransferStatusEnum.Instructed` |
-| Cash allocation | Trader's Front Book | Exchange-Facing Book | Cash (trade consideration) | `TransferStatusEnum.Instructed` |
-
-**On `Instructed` as the initial state**: For exchange trades, the CSD settlement instruction is generated automatically as part of the exchange execution mechanism. By the time the trade notification reaches the smart contract, the settlement instruction is already in flight to the CSD. The initial state is therefore `Instructed` rather than `Pending`. No separate instructing step is required.
+| Move              | From                  | To                   | Asset                       |
+|-------------------|-----------------------|----------------------|-----------------------------|
+| Equity allocation | Exchange-Facing Book  | Internal Wallet      | Equity units                |
+| Cash allocation   | Internal Wallet       | Exchange-Facing Book | Cash (trade consideration)  |
 
 Both legs are part of the same atomic transaction (see [Transaction atomicity invariant](../invariants.md#core-ledger-invariants)) and are recorded simultaneously. The exchange-facing book nets to flat immediately upon transaction recording.
 
-### 2. Settlement Feed (T+0, parallel)
+**Position-state impact**: each affected position has its quantity recorded into the `Pending(T+1)` bucket. The exchange's CSD settlement instruction is generated automatically by the exchange execution mechanism in parallel with this booking; the smart contract does not separately model the instruction.
 
-In parallel with the smart contract booking, the exchange generates a settlement feed to the external settlement system. The settlement system validates and forwards a settlement instruction to the CSD for delivery versus payment (DvP) of securities and cash at T+1.
+### 2. Settlement Notification (value date)
 
-The smart contract does not directly interact with the settlement system at this stage; the settlement feed runs independently of the ledger booking.
+On the contractual value date the smart contract optimistically transitions the relevant quantity `Pending(value-date) → Settled` on each position involved. Where a settlement-system feed is available, it confirms or contradicts that optimistic transition; where it is not, the optimistic transition stands.
 
-### 3. Settlement Notification (T+1 onwards)
+A **settlement failure does not extinguish the legal obligation** between the parties — the trade still exists, only the settlement attempt has failed. Failures are therefore recorded at the position-state level by rotating the relevant quantity into the next business day's `Pending` bucket. The terminal `Failed` bucket is reserved for definitive resolutions: bilateral cancellation, mandatory buy-in, and similar end states.
 
-The settlement system sends a settlement notification to the smart contract on each CSD settlement attempt. This notification triggers a state transition on all four moves in the original transaction simultaneously.
+#### Position-State Transitions on Settlement Outcomes
 
-A **settlement fail does not extinguish the legal obligation** between the parties. The trade still exists; only the settlement attempt has failed. The CSD will retry automatically on the next business day. The settlement state therefore has two tiers: a temporary failed state indicating a failed attempt (the obligation persists) and a terminal cancelled state indicating the obligation has been definitively extinguished.
+| Outcome                            | Position-state transition                                         | Meaning                                                                                         |
+|------------------------------------|-------------------------------------------------------------------|-------------------------------------------------------------------------------------------------|
+| Settlement confirmed               | `Pending(D) → Settled`                                            | DvP completed at the CSD; obligation extinguished. Terminal.                                    |
+| Settlement attempt failed (retry)  | `Pending(D) → Pending(D+1)`                                       | CSD retries the next business day. Obligation persists. Non-terminal.                           |
+| Bilateral cancellation             | `Pending(D) → Failed`                                             | Trade cancelled by mutual agreement; obligation extinguished. Terminal.                         |
+| Buy-in triggered                   | `Pending(D) → Failed`; new trade transaction created              | Mandatory buy-in initiated; original instruction cancelled. Terminal — new trade compensates.   |
 
-#### Settlement State Transitions
-
-| Notification | New CDM State | Meaning |
-|---|---|---|
-| Settlement confirmed | `TransferStatusEnum.Settled` | DvP completed at CSD; obligation extinguished. Terminal. |
-| Settlement attempt failed | `TransferStatusEnum.Pending` | DvP attempt failed; obligation persists; CSD will retry. Non-terminal. |
-| Instruction cancelled (bilateral) | `TransferStatusEnum.Failed` | Trade cancelled by mutual agreement; obligation extinguished. Terminal — reversal required (see below). |
-| Buy-in triggered | `TransferStatusEnum.Failed` | Mandatory buy-in initiated; original instruction cancelled. Terminal — new buy-in transaction created (see below). |
-
-All state transitions are applied atomically to all four moves in the transaction.
+All transitions apply atomically to every affected position in the original transaction (the two-leg external and internal legs move in lockstep).
 
 #### Post-Failure Resolution Paths
 
@@ -74,58 +76,39 @@ There are three distinct resolution paths once a settlement attempt has failed.
 
 **Path 1 — Retry and settle (most common)**
 
-The CSD retries the instruction on each subsequent business day. No new ledger transaction is created. The moves cycle between `Pending` (failed attempt received) and `Instructed` (retry instruction submitted) until the settlement ultimately succeeds (`Settled`) or the instruction is cancelled.
-
-```
-Instructed → Pending (fail) → Instructed (retry) → ... → Settled
-```
-
-No reversal is created. The original moves are the definitive record.
+The CSD retries each business day. No new ledger transaction is created. Quantity rotates `Pending(D) → Pending(D+1) → ...` until DvP succeeds (`Pending → Settled`) or the instruction is terminally cancelled.
 
 **Path 2 — Bilateral cancellation**
 
-Both parties agree to cancel the trade. The settlement system sends a cancellation confirmation, transitioning all moves to `TransferStatusEnum.Failed` (terminal). Because `Failed` moves are excluded from all wallet balance views (see [invariant 9](../invariants.md#core-ledger-invariants)), the balances are automatically corrected by this state transition alone — no reversal transaction is required or created. The cancellation is recorded as a state event on the original moves; the ledger retains the full history.
-
-Note: the [Cancellation by reversal invariant](../invariants.md#core-ledger-invariants) does not apply here because the original moves never reached `Settled` state and therefore never affected any balance. A reversal transaction would over-correct.
-
-```
-Instructed → Pending (fail) → ... → Failed (cancellation confirmed)
-                                     ↑ balance auto-corrected; no reversal transaction
-```
+Both parties agree to cancel the trade. The smart contract moves quantity to the `Failed` bucket on every affected position. Because `Failed` quantities are excluded from all wallet balance views (per [invariant 9](../invariants.md#core-ledger-invariants)), balances auto-correct — **no reversal transaction is required or created**. The [Cancellation by reversal invariant](../invariants.md#core-ledger-invariants) does not apply because the quantity never reached `Settled` and never affected any balance.
 
 **Path 3 — Mandatory buy-in (CSDR / equivalent)**
 
-After a defined number of failed settlement days (typically 4 business days for equities under EU CSDR), a mandatory buy-in is triggered. A buy-in agent purchases the securities in the open market and delivers them to the receiving party. The cost difference is charged back to the failing party.
-
-The original instruction is cancelled, transitioning all original moves to `TransferStatusEnum.Failed` (terminal). As with bilateral cancellation, no reversal of the original transaction is created — the `Failed` state removes the original moves from all balance views. The buy-in constitutes a **new trade** and generates its own new transaction with its own execution and settlement lifecycle. A separate cash compensation move is created for any price differential between the original trade price and the buy-in price.
-
-```
-Instructed → Pending (fail) → ... → Failed (buy-in triggered)
-                                     ↑ excluded from all balances; no reversal transaction
-                                        └→ [New buy-in transaction, Instructed → Settled]
-                                        └→ [Cash compensation move, Instructed → Settled]
-```
+After a defined number of failed settlement days (typically 4 business days for equities under EU CSDR), a mandatory buy-in is triggered. A buy-in agent purchases the securities in the open market and delivers them to the receiving party; the cost difference is charged back to the failing party. The original trade's quantity is moved into the `Failed` bucket on all affected positions; the buy-in is a **new trade** with its own transaction and settlement lifecycle, plus a separate cash compensation move for any price differential.
 
 ---
 
 ## CDM Event Representation
 
-| Lifecycle Event | CDM Business Event Qualification | CDM Transfer State | Notes |
-|---|---|---|---|
-| Trade notification received | `EventQualificationEnum.Execution` | `TransferStatusEnum.Instructed` | Smart contract creates the transaction and all four moves |
-| Settlement confirmed | — (state transition only) | `TransferStatusEnum.Settled` | Terminal. Triggered by settlement system confirmation. |
-| Settlement attempt failed | — (state transition only) | `TransferStatusEnum.Pending` | Non-terminal. CSD will retry. No new transaction. |
-| Retry instruction submitted | — (state transition only) | `TransferStatusEnum.Instructed` | Non-terminal. Settlement system re-submits CSD instruction. |
-| Bilateral cancellation confirmed | — (state transition only) | `TransferStatusEnum.Failed` | Terminal. No reversal transaction — `Failed` state excludes moves from all balances. |
-| Buy-in triggered | — (state transition only) | `TransferStatusEnum.Failed` | Terminal. No reversal transaction — `Failed` state excludes moves from all balances. |
-| Buy-in trade | `EventQualificationEnum.Execution` | `TransferStatusEnum.Instructed` | New transaction; independent settlement lifecycle. |
-| Buy-in cash compensation | — | `TransferStatusEnum.Instructed` | Single cash move for buy-in price differential; settles with buy-in trade. |
+CDM `TransferStatusEnum` values are used here as the event vocabulary — i.e. the labels for inbound feed messages and outbound notifications. They are **not** stamped on individual moves; canonical settlement state lives in the position-state bucket per the [State Model](../state.md).
+
+| Lifecycle Event                   | CDM Business Event Qualification    | Event Vocabulary (CDM)            | Position-state effect                                              |
+|-----------------------------------|-------------------------------------|-----------------------------------|--------------------------------------------------------------------|
+| Trade notification received       | `EventQualificationEnum.Execution`  | —                                 | New quantity added to `Pending(T+1)` on every affected position    |
+| Settlement confirmed              | — (state transition only)           | `TransferStatusEnum.Settled`      | `Pending(D) → Settled`. Terminal.                                  |
+| Settlement attempt failed         | — (state transition only)           | `TransferStatusEnum.Pending`      | `Pending(D) → Pending(D+1)`. Non-terminal.                         |
+| Bilateral cancellation confirmed  | — (state transition only)           | `TransferStatusEnum.Failed`       | `Pending(D) → Failed`. Terminal. No reversal needed.               |
+| Buy-in triggered                  | — (state transition only)           | `TransferStatusEnum.Failed`       | `Pending(D) → Failed`. Terminal. Triggers buy-in trade.            |
+| Buy-in trade                      | `EventQualificationEnum.Execution`  | —                                 | New trade transaction; quantity into `Pending(T+1)`.               |
+| Buy-in cash compensation          | —                                   | —                                 | Single cash move for buy-in price differential; settles with the buy-in trade. |
 
 CDM reference: [Event Model](https://cdm.finos.org/docs/event-model/) · [FINOS CDM GitHub](https://github.com/finos/common-domain-model)
 
 ---
 
 ## Corporate Actions
+
+Application of corporate actions across all subscribed positions follows the [Corporate Action Orchestration](../invariants.md#corporate-action-orchestration) model in `invariants.md`: subscriptions are recorded at product creation; CA records are defined per listing; application is atomic across an ISIN per [invariant 12](../invariants.md#core-ledger-invariants); position-level overrides resolve per the Modes order before the ex-date, with a cancel/correct path post-ex-date. This section covers the equity-specific mechanics for each CA type.
 
 The CDM defines the following corporate action types for equities in `CorporateActionTypeEnum`. The authoritative source is the Rosetta enumeration file: [`event-common-enum.rosetta`](https://github.com/finos/common-domain-model/blob/master/rosetta-source/src/main/rosetta/event-common-enum.rosetta). CDM event model documentation: [https://cdm.finos.org/docs/event-model/](https://cdm.finos.org/docs/event-model/).
 
@@ -156,29 +139,43 @@ The CDM defines the following corporate action types for equities in `CorporateA
 
 Cash dividends are received by holders of direct equity positions. Derivative holders (e.g. equity option holders) do not receive dividends directly — the dividend is factored into derivative pricing at inception and through delta adjustments.
 
-**Ledger treatment**: On the ex-date an `Expected` move is booked per [cash_payments.md](cash_payments.md). On the payment date the move transitions through `Instructed → Settled`.
+**Eligibility**: Dividend eligibility is determined per position state (see [state.md](../state.md)). Only quantities in the `Settled` bucket of the relevant `(unit, wallet, counterparty)` position on the record date are eligible. Quantities still in `Pending(D)` on the record date — e.g. shares purchased intraday on T but with anticipated settlement on T+2 falling after record date — do **not** receive the dividend; the seller, whose `Settled` balance has not yet been reduced, retains eligibility for those shares.
 
-| Move                | From                 | To                   | Asset                         | Initial State |
-|---------------------|----------------------|----------------------|-------------------------------|---------------|
-| Dividend receipt    | CSD                  | Exchange-Facing Book | Cash (gross dividend amount)  | `Expected`    |
-| Dividend allocation | Exchange-Facing Book | Trader's Front Book  | Cash (net dividend after tax) | `Pending`     |
+**Ledger treatment**: On the ex-date the dividend cash moves are created and the receiving positions record the cash quantity in `Pending(payment-date)`. On the payment date the optimistic transition `Pending(payment-date) → Settled` applies to both positions.
 
-**Dividend tax treatment**: Withholding tax and other dividend taxes are applied at two levels:
+| Move                | From                 | To                   | Asset                         | Position-state on creation  |
+|---------------------|----------------------|----------------------|-------------------------------|-----------------------------|
+| Dividend receipt    | CSD                  | Exchange-Facing Book | Cash (gross dividend amount)  | `Pending(payment-date)`     |
+| Dividend allocation | Exchange-Facing Book | Internal Wallet      | Cash (net dividend after tax) | `Pending(payment-date)`     |
 
-1. **Wallet and jurisdiction level**: The applicable rate depends on the jurisdiction of incorporation of the issuing company and the legal entity status of the receiving wallet (e.g. domestic investor, non-resident, treaty-eligible entity). The net amount in the allocation move reflects the rate applicable to the receiving book.
+**Dividend tax treatment**: The applicable withholding tax rate is resolved per dividend recipient at application time. The rate function is:
 
-2. **Synthetic instruments and index products**: For instruments that do not directly hold the underlying equities but carry economic dividend exposure (e.g. total return swaps, structured products referencing a price-return index), withholding tax equivalent charges may apply. For synthetic instruments above a given delta threshold, withholding taxes on dividends may be levied as if the holder were a direct holder of the underlying shares. The applicable delta threshold and the resulting tax charge are instrument-specific and determined per applicable jurisdiction rules and the instrument terms. The composition of any index referenced by the instrument must also be considered — withholding rates may vary across the constituent equities by their individual jurisdictions.
+```
+rate = productInstanceOverride
+       ?? lookup(counterparty, issuerJurisdiction, counterpartyJurisdiction)
+```
+
+| Dimension                   | Description                                                                                      | Source                                  |
+|-----------------------------|--------------------------------------------------------------------------------------------------|-----------------------------------------|
+| `counterparty`              | The entity receiving the dividend (or whose synthetic exposure is being credited)                | Counterparty static data                |
+| `issuerJurisdiction`        | Jurisdiction of incorporation of the issuing company                                              | Issuer static data on the listing       |
+| `counterpartyJurisdiction`  | Tax residence of the counterparty (drives treaty status, domestic vs non-resident treatment)     | Counterparty static data                |
+| `productInstanceOverride`   | Optional per-product-instance override of the matrix-derived rate (e.g. a structured note with non-standard withholding terms) | Product state |
+
+The lookup is performed independently for each `(unit, wallet, counterparty wallet)` position eligible to receive the dividend; a single cash dividend on a single equity may therefore produce different net amounts for different counterparty wallets in the same orchestrated transaction. Each counterparty's allocation move uses its own resolved rate; gross dividend × (1 − rate) is the net amount paid to that counterparty.
+
+**Synthetic instruments and index products**: For instruments that do not directly hold the underlying equities but carry economic dividend exposure (e.g. total return swaps, structured products referencing a price-return index), withholding-tax equivalent charges may apply. For synthetic instruments above a given delta threshold, withholding may be levied as if the holder were a direct holder of the underlying shares. The applicable delta threshold and the resulting charge are instrument-specific and may be expressed as a `productInstanceOverride` on the synthetic product's state. For index-referencing instruments, the rate function is applied per constituent and aggregated, since withholding rates may vary across constituents by their individual issuer jurisdictions.
 
 ### Stock Split (SPLF), Reverse Stock Split (SPLR), and Scrip Dividend (DVSE)
 
 These corporate actions change the number of shares in issue without changing the total monetary value of the position. The ledger adjustment is a quantity move between the CSD and the relevant books.
 
-**2-for-1 stock split example**: The CSD delivers additional shares equal to the existing holding. Both the exchange-facing book and the trader's front book double their holdings.
+**2-for-1 stock split example**: The CSD delivers additional shares equal to the existing holding. Both the exchange-facing book and the internal wallet double their holdings.
 
-| Move                     | From                 | To                   | Asset                                  | Initial State          |
-|--------------------------|----------------------|----------------------|----------------------------------------|------------------------|
-| Additional shares (EFB)  | CSD                  | Exchange-Facing Book | Equity units (= existing EFB holding)  | `Instructed → Settled` |
-| Additional shares (book) | Exchange-Facing Book | Trader's Front Book  | Equity units (= existing book holding) | `Instructed → Settled` |
+| Move                     | From                 | To                   | Asset                                  | Position-state on creation |
+|--------------------------|----------------------|----------------------|----------------------------------------|----------------------------|
+| Additional shares (EFB)  | CSD                  | Exchange-Facing Book | Equity units (= existing EFB holding)  | `Settled`                  |
+| Additional shares (book) | Exchange-Facing Book | Internal Wallet      | Equity units (= existing book holding) | `Settled`                  |
 
 For a **reverse split** (e.g. 1-for-2), both moves reverse direction: shares are returned to the CSD, halving the quantities held in both wallets.
 
@@ -206,10 +203,10 @@ A rights issue grants existing shareholders the right — but not the obligation
 
 **Ledger treatment**: On the ex-date, rights units are delivered from the CSD to the relevant books as a quantity move.
 
-| Move                     | From                 | To                   | Asset                                  | Initial State          |
-|--------------------------|----------------------|----------------------|----------------------------------------|------------------------|
-| Rights allocation (EFB)  | CSD                  | Exchange-Facing Book | Rights units (pro-rata to equity held) | `Instructed → Settled` |
-| Rights allocation (book) | Exchange-Facing Book | Trader's Front Book  | Rights units (pro-rata to equity held) | `Instructed → Settled` |
+| Move                     | From                 | To                   | Asset                                  | Position-state on creation |
+|--------------------------|----------------------|----------------------|----------------------------------------|----------------------------|
+| Rights allocation (EFB)  | CSD                  | Exchange-Facing Book | Rights units (pro-rata to equity held) | `Settled`                  |
+| Rights allocation (book) | Exchange-Facing Book | Internal Wallet      | Rights units (pro-rata to equity held) | `Settled`                  |
 
 **Rights smart contract**: The rights instrument is governed by a new smart contract that accepts an exercise event. During the subscription period the holder may:
 

@@ -8,6 +8,24 @@ CDM qualifications use `EventQualificationEnum` values unless marked `†` (besp
 
 ---
 
+## QRL-Issued Events
+
+QRL is the observation / event ladder that drives smart contract invocations. Each smart contract subscribes to events relevant to its product state and is invoked when QRL emits one. The supported QRL event types are:
+
+| Event               | Purpose                                                                                                              |
+|---------------------|----------------------------------------------------------------------------------------------------------------------|
+| `BarrierMonitoring` | A scheduled or continuous-monitoring barrier observation date. Carries the observed reference level. Consumed by smart contracts with barrier features (equity options, structured products) to evaluate breach. |
+| `IndexObservation`  | A scheduled observation of an index, NAV, or basket level (e.g. autocall observation, QIS NAV computation, structured-product observation date). |
+| `StrikeObservation` | An observation that determines or fixes a strike (e.g. forward-start strike fixing, lookback strike determination, average-strike observation contributing to the strike calculation). |
+| `CashPayment`       | A scheduled cash-flow date (coupon, dividend record date, fixed leg payment, principal redemption). Triggers the smart contract to compute and book the cash move per [cash_payments.md](smart_contracts/cash_payments.md). |
+| `Termination`       | A scheduled or triggered contract-termination event (expiry, maturity, exercise, knock-out). Drives the unit-state liveliness transition `Active → Matured` and the creation of any final settlement transaction. |
+| `PhysicalDelivery`  | The settlement leg of a physically-settled contract (option exercise, futures physical delivery, structured-product share redemption). Triggers the smart contract to book the underlying delivery and any associated cash payment. |
+| `CorporateAction`   | An ISIN-level corporate action ready for application. Payload carries the per-listing adjustment values (R-values, cash amounts, deliverable substitutions, withholding rates) and the action type (split, dividend, scrip, rights, spin-off, etc.). Triggers atomic application across all subscribed positions per [invariant 12](invariants.md#core-ledger-invariants) and the [Corporate Action Orchestration](invariants.md#corporate-action-orchestration) model. |
+
+Per [invariant 10](invariants.md#core-ledger-invariants), each event is delivered idempotently: replays are no-ops by virtue of the unit state's last-lifecycle-event marker.
+
+---
+
 ## Contract Abbreviations
 
 | Abbr | Smart Contract                                                               |
@@ -62,7 +80,7 @@ CDM qualifications use `EventQualificationEnum` values unless marked `†` (besp
 |------------------------------------------------|-------|-------|-------|-------|-------|-------|-------|-------|-------|-------|-------|
 | EOD Settlement — VM Allocation (Tier 1)        |       | ✓     |       |       |       |       |       |       |       |       |       |
 | EOD Settlement — VM External Payment (Tier 2)  |       | ✓     |       |       |       |       |       |       |       |       |       |
-| NewTrade → RunningPosition Transition          |       | ✓     |       |       |       |       |       |       |       |       |       |
+| EOD Settlement — Cost-Basis Reset              |       | ✓     |       |       |       |       |       |       |       |       |       |
 | Notional Reset / Revaluation                   |       |       | ✓     |       |       |       |       |       |       |       |       |
 | SBL Collateral Margin Call / Return            |       |       |       |       |       |       |       |       |       |       | ✓     |
 | IFR Rate Change                                |       |       | ✓     |       |       |       |       |       |       |       |       |
@@ -196,9 +214,9 @@ CDM qualifications use `EventQualificationEnum` values unless marked `†` (besp
 
 | Event                                         | CDM Qualification               | Ext | Move State / Notes                                            |
 |-----------------------------------------------|---------------------------------|-----|---------------------------------------------------------------|
-| EOD Settlement — VM Allocation (Tier 1)       | `DailySettlementEvent`          | †   | Internal cash move (Desk ↔ EFB); `Settled` immediately        |
-| EOD Settlement — VM External Payment (Tier 2) | `DailySettlementEvent`          | †   | External cash move (EFB ↔ CCP); `Expected → Instructed → Settled` |
-| NewTrade → RunningPosition Transition         | `DailySettlementEvent`          | †   | — (state event on futures unit; no new move)                  |
+| EOD Settlement — VM Allocation (Tier 1)       | `DailySettlementEvent`          | †   | Internal cash move (Internal Wallet ↔ EFB); `Settled` immediately |
+| EOD Settlement — VM External Payment (Tier 2) | `DailySettlementEvent`          | †   | External cash move (EFB ↔ CCP); `Pending(value-date) → Settled`   |
+| EOD Settlement — Cost-Basis Reset             | `DailySettlementEvent`          | †   | Position-state update: `costBasis ← S × multiplier × N`; marker → `EOD settled YYYY-MM-DD` |
 | Notional Reset / Revaluation                  | `Reset` / `MtMResetEvent`       | †   | `Pending → Settled` (if Δ ≠ 0); state event only (if Δ = 0)  |
 | SBL Collateral Margin Call / Return           | `MarkToMarketCollateralCall`    | †   | `Pending` (additional collateral due) / `Expected` (excess returned) |
 | IFR Rate Change                               | `IFRUpdateEvent`                | †   | — (state event on funding `TradeState`; no move created)      |
@@ -255,7 +273,7 @@ CDM qualifications use `EventQualificationEnum` values unless marked `†` (besp
 | SBL Maturity / Loan Termination            | `ContractTermination`                        |     | Securities return `Pending`; collateral release `Expected`; final fee `Expected`/`Pending` |
 | Futures Expiry — Cash Settlement           | `ContractTermination`                        |     | Extinguishment `Pending`; final VM `Expected`                |
 | Futures Expiry — Physical Delivery         | `ContractTermination`                        |     | Per underlying contract (equities.md / bonds.md)             |
-| Futures Position Close                     | `Execution` (offsetting trade)               |     | `Settled` (futures unit); `NewTrade` state until EOD         |
+| Futures Position Close                     | `Execution` (offsetting trade)               |     | `Settled` (futures unit); updates `costBasis` and `N`        |
 | NDF Maturity / Unit Extinguishment         | `ContractTermination`                        |     | `Pending`; NDF state `Active → Matured → Terminated`         |
 | FX Early Termination (pre-settlement)      | —                                            |     | `Pending` / `Instructed → Failed`; no reversal               |
 | Bond — Early Redemption by Issuer (Call)   | `EarlyTerminationProvision`                  |     | Bond return `Instructed`; redemption cash `Expected`         |

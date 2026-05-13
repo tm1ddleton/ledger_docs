@@ -2,365 +2,328 @@
 
 ## Overview
 
-This smart contract governs the booking and lifecycle of equity options: vanilla European and American options, and barrier options (knock-out and knock-in, single and double barrier, discrete and continuous monitoring). It covers both cash-settled and physically-settled variants, and the margining model for exchange-listed options.
+This smart contract governs the lifecycle of equity options: vanilla European and American (and Bermudan), and barrier options (knock-out and knock-in, single and double barrier, discrete and continuous monitoring). It covers both cash-settled and physically-settled variants. The same smart contract serves both long and short sides of a trade — long and short are simply opposite signs of the position state on the relevant `(unit, wallet, counterparty wallet)` tuple.
 
-**Role of QRL**: QRL is the pricing library. Given the option's trade terms, QRL can specify what market data observations it requires and at what dates to value the product from inception to expiry. The smart contract layer consumes QRL's output to determine state transitions (e.g. is a barrier breached? is the option in the money at expiry?) and generates the resulting lifecycle events and moves to the ledger. QRL implicitly defines the smart contract's event schedule.
+**Role of QRL**: QRL is the pricing library and event ladder. Given the option's product state, QRL specifies the observation dates and data the smart contract requires (e.g. barrier observations, expiry-date reference fixing) and emits lifecycle events at the appropriate times. The smart contract consumes these events to drive state transitions and produce moves.
+
+---
+
+## Booking Model
+
+Per [invariant 11](../invariants.md#core-ledger-invariants), the booking model is not the responsibility of the smart contract. The canonical example assumes a single internal wallet that holds the option position and any related hedges. Real-world arrangements — listed-option clearing through a CCP and FCM, segregated client accounts, allocation across desks, novation chains — are operational concerns and do not change the smart contract's lifecycle behaviour.
+
+| Party              | Wallet Type     | Description                                                      |
+|--------------------|-----------------|------------------------------------------------------------------|
+| Internal Wallet    | Real wallet     | Holds the option position and any hedge inventory                |
+| Counterparty       | Virtual wallet  | The other party to an OTC option (or the CCP for listed options) |
+| Equity CSD / Wallet| Virtual / real  | Counterparty for share delivery in the physical settlement path  |
+
+Margin (initial and variation) is **out of scope** for this smart contract per the IM exclusion in [invariants.md](../invariants.md). The only cash flow created by this contract for a vanilla / barrier option is the premium at inception (and, for cash-settled exercise, the intrinsic-value payment at settlement).
 
 ---
 
 ## Product Scope
 
-| Product                         | Exercise Style | Settlement        |
-|---------------------------------|----------------|-------------------|
-| Vanilla call / put              | European       | Cash or physical  |
-| Vanilla call / put              | American       | Cash or physical  |
-| Single-barrier knock-out (KO)   | European       | Cash or physical  |
-| Single-barrier knock-in (KI)    | European       | Cash or physical  |
-| Double-barrier KO               | European       | Cash or physical  |
-| KO with rebate                  | European       | Cash rebate + termination |
-| Exchange-listed call / put      | American       | Cash or physical via CCP |
+| Product                         | Exercise Style          | Settlement        |
+|---------------------------------|-------------------------|-------------------|
+| Vanilla call / put              | European                | Cash or physical  |
+| Vanilla call / put              | American / Bermudan     | Cash or physical  |
+| Single-barrier knock-out (KO)   | European                | Cash or physical  |
+| Single-barrier knock-in (KI)    | European                | Cash or physical  |
+| Double-barrier KO               | European                | Cash or physical  |
+| KO with rebate                  | European                | Cash rebate + termination |
 
 ---
 
-## Parties and Wallets
+## State
 
-| Party                  | Wallet Type    | Description                                                                                      |
-|------------------------|----------------|--------------------------------------------------------------------------------------------------|
-| Option Desk Book       | Real wallet    | Holds the option unit position and cash flows for the life of the contract                       |
-| Counterparty           | Virtual wallet | The other party to an OTC option; seller of the option unit at execution                         |
-| CCP                    | Virtual wallet | Exchange-listed options only; the central counterparty post-clearing                             |
-| CCP Margin Account     | Real wallet    | Exchange-listed options only; holds posted initial margin against the CCP                        |
-| Equity Wallet          | Real wallet    | Physically-settled options only; the desk's equity holding wallet (see [equities.md](equities.md)) |
+The equity options smart contract is stateless. Each invocation receives Product state, Unit state, and Position state per the global [State Model](../state.md).
 
----
+### Product State
 
-## Option Unit
+| Field                  | Description                                                                          |
+|------------------------|--------------------------------------------------------------------------------------|
+| `optionType`           | `Call` / `Put`                                                                       |
+| `exerciseStyle`        | `European`, `American`, or `Bermudan` (with exercise calendar)                       |
+| `strike`               | Strike price                                                                          |
+| `expiry`               | Expiry date                                                                           |
+| `underlying`           | Reference equity (single name, basket, or index)                                     |
+| `multiplier`           | Contract size (e.g. 100 shares per contract for listed options)                      |
+| `settlementType`       | `Cash` / `Physical`                                                                  |
+| `settlementCcy`        | Settlement currency                                                                   |
+| `premium`              | Premium amount and payment date                                                       |
+| `barrier`              | Optional: `{ kind: KI / KO, level(s), monitoring: discrete / continuous, observationSchedule, rebate? }` |
 
-An option contract is represented in the ledger as an **option unit** — a non-fungible contract unit held in the Option Desk Book. This is consistent with the NDF unit model in [fx.md](fx.md): the contract position is a first-class ledger asset visible in the live balance from execution.
+For double-barrier options, `barrier.level` is a pair (upper, lower).
 
-The option unit is created at execution (seller's wallet → buyer's wallet) and extinguished at termination (buyer's wallet → seller's wallet / CCP). CDM represents this position as a `TradeState` rather than a transferable unit; the ledger deviates by representing it as a unit move, while the CDM `TradeState` lifecycle maps onto the option unit's states.
+### Unit State
 
-### Option Unit States
+Unit state is compound with three parts — liveliness, last-lifecycle-event marker, and corporate-actions-applied list — per the global model in [state.md](../state.md), written together as e.g. `Active | Barrier observed 2026-02-15 | CAs: []` or `Active (barrier_knocked) | Exercise notice 2026-04-10 | CAs: [split 2025-08-15]`. Corporate actions on the underlying propagate to the option via the [Corporate Action Orchestration](../invariants.md#corporate-action-orchestration) model and are appended to the option unit's CA list.
 
-These states are carried on the smart contract and are distinct from the payment move states in [invariants.md](../invariants.md), which govern cash and delivery moves.
+Liveliness:
 
-| State       | Meaning                                                                                                                                                            | CDM Mapping                                                                              |
-|-------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------|
-| `Active`    | Option is live; exercisable (American) or pending expiry (European); monitoring in progress for barriers                                                           | `TradeState` with no `closedState`                                                       |
-| `Matured`   | Contractual lifetime has ended (expiry date reached, KO triggered, or KI expired without activation) but outstanding cash or delivery obligations remain unsettled | **Bespoke extension** — CDM has no intermediate matured state; see §CDM Extensions      |
-| `Terminated`| All obligations discharged; option unit fully extinguished                                                                                                          | `TradeState.closedState`; closing reason varies by event (see below)                    |
+| State      | Meaning                                                                                                                |
+|------------|------------------------------------------------------------------------------------------------------------------------|
+| `Active`   | Option is live; exercisable (American/Bermudan) or pending expiry (European); barrier monitoring (where applicable) ongoing |
+| `Matured`  | Contractual end reached (expiry, KO trigger, or final exercise) but outstanding obligations not yet fully settled       |
+| `Expired`  | All obligations discharged; option unit fully extinguished                                                              |
 
----
+Contingent flags carried within the liveliness component:
 
-## Premium
+| Flag              | Set by                                                                                                          |
+|-------------------|-----------------------------------------------------------------------------------------------------------------|
+| `barrier_knocked` | A barrier observation event in which the barrier is breached. For KI: option remains `Active`. For KO: drives `Active → Matured`. |
 
-The option premium is a standalone cash payment governed by [cash_payments.md](cash_payments.md). It is created simultaneously with the option unit in a single execution transaction:
+Last-lifecycle-event marker — examples:
 
-| Move           | From                    | To                      | Asset                  | Initial State               |
-|----------------|-------------------------|-------------------------|------------------------|-----------------------------|
-| Option unit    | Counterparty            | Option Desk Book        | 1 option unit          | `Instructed → Settled`      |
-| Premium        | Option Desk Book        | Counterparty            | Cash (agreed premium)  | `Pending`                   |
+| Marker                              | Set by                                                          |
+|-------------------------------------|-----------------------------------------------------------------|
+| `Premium paid YYYY-MM-DD`           | Inception (premium settlement)                                  |
+| `Barrier observed YYYY-MM-DD`       | A barrier observation event (regardless of breach outcome)      |
+| `Exercise notice YYYY-MM-DD`        | Holder exercises (American/Bermudan)                            |
+| `Assignment notice YYYY-MM-DD`      | Writer is assigned (mirror of exercise notice)                  |
+| `Expiry valuation YYYY-MM-DD`       | Expiry-date fixing observed                                     |
+| `Final settlement YYYY-MM-DD`       | Final settlement transaction created (cash or physical)         |
+| `Corporate action YYYY-MM-DD`       | A corporate-action adjustment applied to product state          |
 
-The option unit transitions to `Settled` and `Active` on trade confirmation. The premium follows the standard payment lifecycle (`Pending → Instructed → Settled`) and typically settles T+2 for OTC options.
+Per [invariant 10](../invariants.md#core-ledger-invariants), the smart contract checks the marker before generating moves; a re-fed observation, exercise notice, or expiry already recorded is a no-op.
 
-For exchange-listed options, the premium is either paid upfront (e.g. OCC-cleared US equity options) or settled daily via variation margin (futures-style). The applicable convention is determined by the exchange and CCP; see [Exchange-Listed Margining](#exchange-listed-options-margining).
+### Position State
 
-**Sold options**: the direction of both moves reverses. The desk receives the premium (`Expected` per cash_payments.md) and delivers the option unit.
+Position state per `(option unit, wallet, counterparty wallet)` is a **two-layer counter**: every quantity is classified along both a settlement dimension and an exercise dimension.
 
----
+**Settlement dimension** (the global bucketed counter):
 
-## CDM State Model
+| Bucket          | Meaning                                          |
+|-----------------|--------------------------------------------------|
+| `Settled`       | Option position confirmed settled                |
+| `Pending(date)` | Option position settling on the given date       |
+| `Failed`        | Settlement attempt terminally failed             |
 
-### Contract States
+**Exercise dimension** (option-specific extension):
 
-The CDM `TradeState` governs the option contract. All terminal paths pass through `Matured` before reaching `Terminated`: the option transitions to `Matured` on the contractual end event and to `Terminated` once all resulting cash and delivery obligations have settled. The following closing reasons apply when the trade reaches `Terminated`:
+| Sub-bucket           | Meaning (long side)                                          | Meaning (short side)                                          |
+|----------------------|--------------------------------------------------------------|---------------------------------------------------------------|
+| `Live`               | Unexercised; full optionality remains                         | Unassigned                                                    |
+| `Exercised(date)`    | Exercise notice given; awaiting settlement on `date`          | —                                                             |
+| `Assigned(date)`     | —                                                            | Assignment notice received; awaiting settlement on `date`     |
 
-| Event                                    | CDM `ClosedState.closingReason`      | Standard / Bespoke            |
-|------------------------------------------|--------------------------------------|-------------------------------|
-| Option exercised (in the money)          | `Exercised`                          | Standard CDM                  |
-| Option expired worthless                 | `Lapsed`                             | Standard CDM                  |
-| Bilateral early termination              | `Termination`                        | Standard CDM                  |
-| KO barrier triggered                     | `BarrierKnockOut`                    | **Bespoke extension**         |
-| KI barrier triggered                     | — (state event only; option remains `Active`) | **Bespoke extension** |
-| KI expired without barrier activation    | `Lapsed`                             | Standard CDM (same as OTM expiry) |
+Position state cells the product of the two dimensions. Example for a long American call holder, mid-life:
 
-### Transfer States
+```
+Settled:
+  Live:               100
+  Exercised(T+1):       5
+Pending(T+1):
+  Live:                20
+Failed:
+  Live:                 0
+```
 
-Cash and delivery moves use CDM `TransferStatusEnum` per [invariants.md](../invariants.md):
+Total options held = sum across all cells = 125. Of those, 5 are awaiting underlying delivery on T+1 following an exercise notice; 20 are still settling from a recent purchase.
 
-| Move                        | Initial State | Terminal State | Notes                                      |
-|-----------------------------|---------------|----------------|--------------------------------------------|
-| Premium (outgoing)          | `Pending`     | `Settled`      | T+2 for OTC; same-day or daily VM for listed |
-| Cash settlement             | `Pending`     | `Settled`      | T+2 from exercise / expiry date            |
-| Physical equity delivery    | `Instructed`  | `Settled`      | DvP at CSD; T+2; see equities.md           |
-| Strike payment (physical)   | `Instructed`  | `Settled`      | Paired with equity delivery in same transaction |
-| KO rebate                   | `Pending`     | `Settled`      | Created at barrier trigger; see §Rebates   |
-| Initial margin              | `Pending`     | `Settled`      | Cash to CCP margin account; listed only    |
-| Variation margin            | `Pending`     | `Settled`      | Daily cash flow to/from CCP; listed only   |
+For European options the `Exercised`/`Assigned` sub-buckets remain empty until the expiry event itself, at which point the `Live` quantity (if ITM) transitions to `Exercised(expiry + n)` automatically. The exercise dimension is therefore degenerate (always `Live`) for European options pre-expiry.
 
-### Event Qualifications
+### Data Requirements
 
-| Lifecycle Event              | CDM `EventQualificationEnum`         | Standard / Bespoke      |
-|------------------------------|--------------------------------------|-------------------------|
-| Trade execution              | `Execution`                          | Standard CDM            |
-| Barrier observation (no trigger) | `Observation`                    | Standard CDM            |
-| Barrier knock-out triggered  | `BarrierKnockOut`                    | **Bespoke extension**   |
-| Barrier knock-in triggered   | `BarrierKnockIn`                     | **Bespoke extension**   |
-| Option exercise              | `Exercise`                           | Standard CDM            |
-| Expiry (auto-exercise or lapse) | `Exercise`                        | Standard CDM            |
-| Margin call                  | `MarginCall`                         | Standard CDM            |
-
----
-
-## Lifecycle Events: Vanilla European Option
-
-### 1. Execution (T+0)
-
-Execution transaction creates the option unit and premium obligation simultaneously (see §Premium). QRL is invoked with the trade terms; it returns the observation dates and data requirements it needs to value the option (in practice: the expiry date and the reference price source for the settlement valuation fixing).
-
-Option unit state: `Active`.
-
-### 2. Expiry Valuation
-
-On the expiry date, the smart contract collects the required market observation (closing price or settlement reference price per the contract terms) and supplies it to QRL. QRL returns the option's settlement value.
-
-**In the money**: exercise proceeds (see §Settlement).
-
-**Out of the money**: the option expires worthless.
-
-| Move                  | From             | To               | Asset           | State                |
-|-----------------------|------------------|------------------|-----------------|----------------------|
-| Option unit lapse     | Option Desk Book | Counterparty     | 1 option unit   | `Pending → Settled`  |
-
-Option unit state: `Active → Matured` on expiry date; `Matured → Terminated` when the lapse move settles. CDM `closedState.closingReason = Lapsed`.
+| Input                                            | Cadence                                | Source              |
+|--------------------------------------------------|----------------------------------------|---------------------|
+| Reference equity price observation               | Per the barrier observation schedule   | Market data         |
+| Continuous-monitoring barrier breach notification| Real-time (continuous-barrier products only) | Market surveillance |
+| Final reference price at expiry                  | At expiry                              | Market data         |
+| Exercise / assignment notice                     | Per the exercise calendar              | Counterparty / CCP  |
+| Corporate-action adjustment factor (R-value etc.)| On ex-date                             | Exchange / clearing house / calculation agent |
 
 ---
 
-## Lifecycle Events: Vanilla American Option
+## Lifecycle Events
 
-### 1. Execution
+All lifecycle events are delivered to the smart contract by the QRL observation / event ladder. Each invocation consults the unit-state marker for idempotency.
 
-Identical to European. QRL returns the exercise window (all business days from start date to expiry) and the expiry valuation date.
+### 1. Inception
 
-### 2. Early Exercise
+**Trigger**: Trade execution. Counterparty and quantity supplied.
 
-The holder may submit an exercise notice on any business day within the exercise window. The smart contract processes the exercise immediately (see §Settlement).
+The option unit is created and the premium cash flow is generated in a single atomic transaction:
 
-### 3. Expiry
+| Move          | From            | To              | Asset                            | State     |
+|---------------|-----------------|-----------------|----------------------------------|-----------|
+| Option unit   | Counterparty    | Internal Wallet | N option units                   | `Settled` |
+| Premium       | Internal Wallet | Counterparty    | Cash (premium amount × N)        | `Pending` |
 
-If not exercised early: at expiry, the smart contract checks the intrinsic value via QRL. If in the money, auto-exercise occurs. If out of the money, the option lapses per the European expiry workflow above.
+For a sold option the directions of both moves reverse.
 
----
+Position state after inception: `Pending(premium settlement date) / Live = N`. Unit state: `Active | Premium paid YYYY-MM-DD` once the premium cash flow settles.
 
-## Lifecycle Events: Barrier Options
+The premium is the only cash flow this smart contract creates at inception; any margin posting is a booking concern per [invariant 11](../invariants.md#core-ledger-invariants).
 
-### Execution
+### 2. Barrier Observation
 
-For all barrier options, execution creates the option unit as per §Premium. QRL is invoked and returns the barrier observation schedule (for discrete monitoring) and the nature of the monitoring (discrete or continuous).
+**Trigger**: Barrier observation date emitted by the QRL observation ladder, or a real-time breach notification for continuously-monitored barriers. The reference equity price is supplied with the event.
 
-All barrier option types (KO, KI, double KO) create an option unit in `Active` state. The distinction between pre-KI and post-KI is carried in the pricing model, not in the ledger state.
+State-only event — no cash or unit moves are generated.
 
-### Discrete Monitoring
+- **No breach**: liveliness unchanged. Marker → `Barrier observed YYYY-MM-DD`.
+- **KI breach** (first occurrence): contingent flag `barrier_knocked` set; liveliness remains `Active`. Marker → `Barrier observed YYYY-MM-DD`.
+- **KO breach**: contingent flag `barrier_knocked` set; liveliness `Active → Matured`. The KO terminates the option — see §6 KO Termination.
 
-QRL specifies the set of observation dates and times (e.g. daily close in the relevant exchange timezone). On each observation date the smart contract collects the closing price and evaluates the barrier condition.
+For double-barrier products the smart contract evaluates both levels at each observation. Continuous and discrete monitoring differ only in event source and timing; the smart contract logic is identical.
 
-- **Barrier not breached**: no ledger event; observation recorded as a state event against the smart contract.
-- **Barrier breached**: trigger event fires (see KO or KI below).
+### 3. Exercise Notice (American / Bermudan)
 
-### Continuous Monitoring
+**Trigger**: Holder submits an exercise notice for `n` units on date `D` (long side); or the writer receives an assignment notice for `n` units (short side).
 
-QRL specifies that the barrier is monitored continuously. The market surveillance system delivers a real-time barrier breach notification to the smart contract as soon as the underlying price crosses the barrier level. The smart contract processes this as an unscheduled observation. The timestamp of the breach is recorded.
+Bermudan options accept exercise only on dates in the exercise calendar; the smart contract rejects (returns no-op) a notice received outside the calendar.
 
-From the smart contract's perspective the processing of a continuous breach is identical to a discrete breach — it is the source and timing of the notification that differs.
+No moves are generated at notice time. Position state shifts:
 
-### Knock-Out (KO): Barrier Triggered
+- **Long side**: move `n` from `Settled / Live` → `Settled / Exercised(D + settlementLag)`.
+- **Short side**: move `n` from `Settled / Live` → `Settled / Assigned(D + settlementLag)`.
 
-| Move                  | From             | To               | Asset           | Initial State |
-|-----------------------|------------------|------------------|-----------------|---------------|
-| Option unit extinguishment | Option Desk Book | Counterparty | 1 option unit   | `Pending`     |
+Marker → `Exercise notice YYYY-MM-DD` (or `Assignment notice YYYY-MM-DD`). The settlement date `D + settlementLag` is determined by `settlementType` (typically T+1 cash, T+2 physical).
 
-Option unit state: `Active → Matured` on KO trigger; `Matured → Terminated` when the extinguishment move and any associated rebate have both settled. CDM `closedState.closingReason = BarrierKnockOut` (bespoke).
+The actual delivery of underlying / cash occurs at the scheduled settlement date — see §5.
 
-If a **rebate** is payable (see §Rebates below), the rebate cash move is created in the same transaction.
+### 4. Expiry Valuation
 
-If the KO barrier is not triggered before expiry, the option proceeds to standard expiry valuation as a vanilla option.
+**Trigger**: Expiry date emitted by the QRL event ladder, with the final reference equity price.
 
-### Knock-In (KI): Barrier Triggered
+The smart contract computes intrinsic value per the option type and product state:
 
-When the KI barrier is breached, the event is recorded as a state event on the option `TradeState`. No cash moves are created and the option unit remains `Active` — the option proceeds to expiry valuation in the normal way. The KI observation is recorded with its timestamp for audit purposes and communicated to the pricing model; the ledger state does not change.
+```
+Call payoff = max(S_T − strike, 0)
+Put  payoff = max(strike − S_T, 0)
+```
 
-CDM: bespoke `BarrierKnockIn` event qualification (see §CDM Extensions); recorded against the existing `TradeState` with no closure.
+For a KI option with no `barrier_knocked` flag set: payoff is forced to zero (the option never activated).
 
-If the KI barrier is **never triggered** before expiry, the option expires worthless regardless of the underlying price at expiry.
+For all `Live` quantity at expiry:
 
-| Move                  | From             | To               | Asset           | State                |
-|-----------------------|------------------|------------------|-----------------|----------------------|
-| Option unit lapse     | Option Desk Book | Counterparty     | 1 option unit   | `Pending → Settled`  |
+- **In the money**: auto-exercise. Move `Live → Exercised(expiry + settlementLag)` (long) or `Live → Assigned(expiry + settlementLag)` (short).
+- **Out of the money** (or unactivated KI): the option lapses.
 
-Option unit state: `Active → Matured` on expiry date; `Matured → Terminated` on lapse move settlement. CDM `closedState.closingReason = Lapsed`.
+| Move (lapse)        | From            | To           | Asset            | State     |
+|---------------------|-----------------|--------------|------------------|-----------|
+| Option extinguishment | Internal Wallet | Counterparty | N option units   | `Pending` |
 
-### Double Barrier
+Marker → `Expiry valuation YYYY-MM-DD`. Liveliness `Active → Matured`; `Matured → Expired` once the lapse moves settle.
 
-A double-barrier option carries both an upper and a lower barrier. For a double KO, the option is extinguished if either barrier is breached. QRL returns both barrier levels and the observation schedule; the smart contract evaluates both levels at each observation. The KO mechanics are identical to the single-barrier case once either barrier is triggered.
+### 5. Final Settlement
 
-### Rebates
+**Trigger**: Settlement date for an `Exercised(date)` or `Assigned(date)` quantity (i.e. exercise + settlementLag, or expiry + settlementLag for auto-exercised European options).
 
-Some KO options specify a rebate: a fixed cash amount paid to the option holder when the option is knocked out.
+#### 5a. Cash settlement
 
-| Rebate Type              | Timing                        | Ledger Treatment                                                               |
-|--------------------------|-------------------------------|--------------------------------------------------------------------------------|
-| Immediate rebate         | Paid at time of KO trigger    | Cash move created in the same transaction as the KO extinguishment; state `Pending` |
-| Deferred rebate          | Paid at the original expiry date | Cash move created at KO trigger with state `Expected`; transitions to `Instructed → Settled` at the deferred payment date |
+| Move              | From            | To              | Asset                          | State     |
+|-------------------|-----------------|-----------------|--------------------------------|-----------|
+| Option extinguishment | Internal Wallet | Counterparty | n option units                 | `Pending` |
+| Cash payoff       | Counterparty    | Internal Wallet | Cash (payoff × multiplier × n) | `Pending` |
 
-A deferred rebate uses the `Expected` state (bespoke, per [cash_payments.md](cash_payments.md)) because the amount is known at KO trigger but the payment is not yet instructed. It contributes to the live balance from the trigger date.
+For a sold option the cash leg reverses (Internal Wallet pays the payoff to the counterparty).
 
----
+#### 5b. Physical settlement
 
-## Settlement
+| Move              | From            | To              | Asset                          | State     |
+|-------------------|-----------------|-----------------|--------------------------------|-----------|
+| Option extinguishment | Internal Wallet | Counterparty | n option units                 | `Pending` |
+| Underlying delivery | Counterparty    | Internal Wallet | n × multiplier shares          | `Pending` |
+| Strike payment    | Internal Wallet | Counterparty    | Cash (strike × multiplier × n) | `Pending` |
 
-### Cash Settlement
+For a put exercised by the long side, the underlying flows from long to short and cash from short to long; the share/cash directions reverse accordingly. The equity delivery follows [equities.md](equities.md).
 
-At exercise or expiry (ITM), the smart contract creates a settlement transaction:
+Position state after settlement: the relevant `Exercised(date)` / `Assigned(date)` cell is cleared. Marker → `Final settlement YYYY-MM-DD`. If no `Live` and no other in-flight `Exercised/Assigned` quantities remain, liveliness `Matured → Expired`.
 
-| Move                  | From             | To               | Asset                              | Initial State |
-|-----------------------|------------------|------------------|------------------------------------|---------------|
-| Option unit           | Option Desk Book | Counterparty     | 1 option unit                      | `Pending`     |
-| Cash settlement       | Counterparty     | Option Desk Book | Cash (intrinsic value, per QRL)    | `Pending`     |
+### 6. KO Termination
 
-Both moves settle T+2 via correspondent bank (`Pending → Instructed → Settled`). Option unit state: `Active → Matured` on exercise date; `Matured → Terminated` when settlement moves have settled. CDM `closedState.closingReason = Exercised`.
+**Trigger**: A KO barrier observation breach (per §2).
 
-### Physical Settlement
+The option terminates immediately. Any `Live` quantity is extinguished:
 
-At exercise, the smart contract creates a DvP transaction linking the option extinguishment to equity delivery:
+| Move                  | From            | To              | Asset            | State     |
+|-----------------------|-----------------|-----------------|------------------|-----------|
+| Option extinguishment | Internal Wallet | Counterparty    | N option units   | `Pending` |
 
-| Move                  | From             | To               | Asset                                    | Initial State  |
-|-----------------------|------------------|------------------|------------------------------------------|----------------|
-| Option unit           | Option Desk Book | Counterparty     | 1 option unit                            | `Pending`      |
-| Equity delivery       | Counterparty     | Equity Wallet    | N shares (per contract terms)            | `Instructed`   |
-| Strike payment        | Option Desk Book | Counterparty     | Cash (N × strike price)                  | `Instructed`   |
+If the product specifies a **rebate**, the rebate cash flow is added to the same transaction:
 
-The equity delivery and strike payment legs follow the exchange-facing book two-leg model per [equities.md](equities.md) and settle DvP at CSD on T+2 from exercise date. Option unit state: `Active → Matured` on exercise date; `Matured → Terminated` when the DvP settles. CDM `closedState.closingReason = Exercised`.
+| Rebate type       | Timing                     | Ledger treatment                                                      |
+|-------------------|----------------------------|------------------------------------------------------------------------|
+| Immediate rebate  | At KO trigger              | Cash move in the KO transaction; state `Pending`                       |
+| Deferred rebate   | At original expiry date    | Cash move recorded at KO with state `Pending(expiry)`; settles at expiry |
 
----
+Liveliness `Active → Matured` at trigger; `Matured → Expired` once extinguishment and any rebate settle. Marker → `Barrier observed YYYY-MM-DD` (the KO date).
 
-## Exchange-Listed Options: Margining
-
-Exchange-listed equity options are cleared through a CCP (e.g. OCC, Eurex, LCH). The desk book faces the CCP rather than the original counterparty. The CCP applies a daily margining process.
-
-### CCP Booking Structure
-
-At execution, the bilateral trade is novated to the CCP. The desk book faces the CCP virtual wallet. The original counterparty relationship is extinguished and replaced by two cleared legs (desk → CCP, counterparty → CCP). This is identical to the cleared IRS novation model in [irs.md](irs.md).
-
-### Initial Margin
-
-At execution (and daily thereafter as the risk profile of the position changes), the CCP calls initial margin based on the potential future exposure of the option portfolio. The methodology is exchange-specific (e.g. SPAN for CME/OCC, PRISMA for Eurex).
-
-| Move                | From               | To                     | Asset               | State                 |
-|---------------------|--------------------|------------------------|---------------------|-----------------------|
-| IM posting          | Option Desk Book   | CCP Margin Account     | Cash                | `Pending → Settled`   |
-| IM return           | CCP Margin Account | Option Desk Book       | Cash                | `Expected → Settled`  |
-
-IM postings and returns are standalone cash moves per [cash_payments.md](cash_payments.md). The CCP Margin Account is a real wallet holding posted collateral; it is segregated from the Option Desk Book. IM is returned at position close or at the CCP's discretion.
-
-Daily IM re-calls (where the CCP increases the margin requirement) generate new `Pending` cash moves to top up the margin account. IM reductions generate `Expected` return moves.
-
-### Variation Margin
-
-Listed equity options are subject to daily mark-to-market settlement. At end of day, the CCP calculates the change in value of each position and calls or pays variation margin accordingly.
-
-| Move                | From               | To                     | Asset               | State                 |
-|---------------------|--------------------|------------------------|---------------------|-----------------------|
-| VM payment (loss)   | Option Desk Book   | CCP                    | Cash                | `Pending → Settled`   |
-| VM receipt (gain)   | CCP                | Option Desk Book       | Cash                | `Expected → Settled`  |
-
-VM moves are created daily and settle same-day or next morning per exchange convention. They are standalone cash moves. The asymmetric treatment (`Pending` for outgoing, `Expected` for incoming) follows the model in [cash_payments.md](cash_payments.md).
-
-### Premium Convention
-
-| Convention           | Market Example         | Treatment                                                                                  |
-|----------------------|------------------------|--------------------------------------------------------------------------------------------|
-| Upfront premium      | OCC (US equity options)| Premium paid at execution per §Premium; T+1 settlement                                    |
-| Futures-style (no upfront premium) | Eurex equity options | No premium move at execution; full P&L is settled daily via variation margin |
-
-For futures-style options the initial move table in §Premium does not apply. The option unit is still created as a unit move, but no premium cash move is generated.
-
-### Exercise and Assignment
-
-American-style exchange-listed options: the holder may submit an exercise notice to the CCP. The CCP randomly assigns the exercise to a short position holder. The smart contract receives the exercise assignment notification and processes settlement per §Settlement. For physical settlement, the equity DvP follows the [equities.md](equities.md) model, with the CCP acting as the exchange-facing book counterparty.
-
----
-
-## CDM Extensions Required
-
-The following bespoke extensions to CDM are required to fully model the barrier option lifecycle.
-
-**1. `ClosedStateEnum.BarrierKnockOut`**
-CDM's `ClosedStateEnum` does not include a barrier knock-out closing reason. This value is needed to distinguish an option terminated by a barrier event from one that was exercised or lapsed.
-
-**2. `EventQualificationEnum.BarrierKnockOut` and `EventQualificationEnum.BarrierKnockIn`**
-CDM's `EventQualificationEnum` has no barrier-specific event types. Both are required to record barrier events as first-class business events in the audit trail. `BarrierKnockOut` closes the `TradeState` with `ClosedStateEnum.BarrierKnockOut`. `BarrierKnockIn` is a state event against the existing `Active` `TradeState` — it does not close or replace the trade; it records the KI observation timestamp and communicates the activation to the pricing model.
-
-**3. `Matured` instrument state (`OptionUnitStateEnum.Matured`)**
-CDM has no intermediate state between a live `TradeState` and a `ClosedState`. The `Matured` state represents the period after the contractual end event (expiry, KO trigger) and before all obligations have settled. It is a bespoke extension carried as a field on the `TradeState` (without setting `closedState`). The `closedState` is only set — with the appropriate closing reason — when the last outstanding move transitions to `Settled`. This state is not specific to options; it applies to all instruments with a maturity date (bonds, IRS, NDFs, structured notes).
-
-**4. Deferred rebate `Expected` state**
-The use of `Expected` for a deferred rebate (amount known at KO, payment deferred to original expiry) is a bespoke state not present in CDM's `TransferStatusEnum`, consistent with its use for anticipated cash receipts in [cash_payments.md](cash_payments.md).
-
-CDM reference: [Event Model](https://cdm.finos.org/docs/event-model/) · [Option Payout](https://cdm.finos.org/docs/product-model/) · [FINOS CDM GitHub](https://github.com/finos/common-domain-model)
+In-flight `Exercised`/`Assigned` quantities are unaffected by a subsequent KO — they have already left the `Live` sub-bucket and are bound for delivery.
 
 ---
 
 ## Corporate Actions
 
-### Quantity-Changing Corporate Actions (R-Value Adjustments)
+Corporate actions on the underlying equity may require adjustments to the option's product state. Application follows the [Corporate Action Orchestration](../invariants.md#corporate-action-orchestration) model: the option subscribes to its underlying listing at inception; CA application is atomic across the ISIN per [invariant 12](../invariants.md#core-ledger-invariants); per-position overrides may be configured before the ex-date. CA events do not generate cash moves on the option itself; they are state events on the option product state and are recorded via the marker `Corporate action YYYY-MM-DD [mode]`.
 
-Corporate actions that change the number of shares in issue — stock splits, reverse stock splits, and scrip dividends — do not change the economic value of an option position but alter the per-contract terms. The adjustment uses an **R-value** (the ratio of post-event to pre-event shares):
+### Quantity-Changing Actions (R-Value Adjustments)
 
-| Term                     | Adjustment                                    |
-|--------------------------|-----------------------------------------------|
-| Strike price             | New strike = Old strike ÷ R                   |
-| Shares per contract      | New shares per contract = Old shares × R      |
+Stock splits, reverse stock splits, and scrip dividends adjust the per-contract terms via an R-value (ratio of post- to pre-event shares):
 
-For a 2-for-1 stock split (R = 2): the strike is halved and shares per contract double. The total option delta and economic value are unchanged.
+| Term                 | Adjustment                              |
+|----------------------|-----------------------------------------|
+| `strike`             | New strike = old strike ÷ R             |
+| `multiplier`         | New multiplier = old multiplier × R     |
 
-The R-value is determined by the exchange or clearing house for listed options (e.g. OCC, Eurex), or by the calculation agent per ISDA methodology for OTC options. The R-value is delivered to the smart contract as a parameter update on the ex-date; no cash moves are created. The adjustment is recorded as a state event on the option `TradeState`.
+For a 2-for-1 split (R = 2): strike halved, multiplier doubled. Total contract value preserved.
+
+The R-value is determined by the exchange or clearing house (listed) or by the calculation agent per ISDA equity-derivative definitions (OTC). It is delivered as a parameter update on the ex-date.
 
 ### Rights Issue (RHTS)
 
-Option holders are not shareholders of record and do not receive the subscription rights directly. Instead, the option contract is adjusted so that its economic value is approximately preserved after the rights issue dilutes the share price on the ex-rights date.
+Option holders are not shareholders of record; the option contract is adjusted so that economic value is approximately preserved through the dilution. The adjustment form is event-specific (strike revision, deliverable change, multiplier change, or a combination) and determined by the exchange or calculation agent.
 
-The adjustment form is event-specific and determined by the exchange or clearing house for listed options, or by the calculation agent per ISDA equity derivative definitions for OTC options. Common forms of adjustment are:
+### Spin-Off, Merger, Takeover
 
-| Adjustment Form    | Description                                                                             |
-|--------------------|-----------------------------------------------------------------------------------------|
-| Strike revision    | Strike reduced to reflect the theoretical ex-rights price; deliverable unchanged        |
-| Deliverable change | Contract delivers additional shares or rights units alongside the original share count  |
-| Multiplier change  | Shares per contract increased to maintain total contract value at the revised price      |
-| Combination        | Two or more of the above applied together; exact terms per the clearing house notice     |
+Where the underlying's identity or composition changes, the treatment is determined case-by-case:
 
-The adjustment is applied as a state event on the option `TradeState` on the ex-date; no cash moves are created. The definitive contract terms after adjustment must be verified against the official clearing house or calculation agent notice for each specific event, as there is no universal formula.
+| Outcome         | Trigger                                                        | Option treatment                                                                        |
+|-----------------|----------------------------------------------------------------|-----------------------------------------------------------------------------------------|
+| Basket option   | Spin-off or merger producing multiple securities               | `underlying` replaced by a basket; option terms adjusted to the basket composition       |
+| Termination     | All-cash merger, delisting, or winding-up of the underlying    | Option terminated; intrinsic value (if any) paid as a final cash settlement              |
+| Client election | Action terms offer the holder a choice of outcome              | Option remains `Active` pending election; treatment applied on receipt of election notice |
 
-### Other Corporate Actions — Spin-Off, Merger, and Takeover
-
-Corporate actions that change the identity or composition of the underlying company do not admit a simple R-value adjustment. The treatment is determined on a case-by-case basis:
-
-| Outcome         | Trigger                                                        | Option Treatment                                                                                     |
-|-----------------|----------------------------------------------------------------|------------------------------------------------------------------------------------------------------|
-| Basket option   | Spin-off or merger producing multiple securities               | Underlying replaced by a basket; option terms adjusted to reflect the basket composition.            |
-| Termination     | All-cash merger, delisting, or winding-up of the underlying    | Option terminated; intrinsic value (if any) paid; `closedState.closingReason = Termination`.        |
-| Client election | Corporate action terms offer the holder a choice of outcome    | Option remains `Active` pending election deadline; treatment applied on receipt of election notice.  |
-
-In some cases the determination is at the client's discretion (e.g. where the counterparty to an OTC option holds the right to elect the adjustment methodology). Where no standard determination applies, the parties may agree a bespoke treatment recorded as a `BespokeEvent`.
+Where no standard determination applies, parties may agree a bespoke treatment recorded via the marker.
 
 ---
 
-## Failure Handling
+## CDM Representation
 
-| Scenario                                       | State                              | Action                                                                                         |
-|------------------------------------------------|------------------------------------|------------------------------------------------------------------------------------------------|
-| Premium fails to settle                        | `TransferStatusEnum.Pending`       | Two-tier retry per [invariant 8](../invariants.md); option unit remains `Active`               |
-| Observation unavailable on scheduled date      | Observation deferred               | Smart contract holds; QRL rescheduled per market convention                                    |
-| Cash settlement fails                          | Two-tier per invariant 8           | `Pending` (retry) or `Failed`; option unit remains `Matured` until all obligations settle     |
-| Physical settlement fails                      | Per [equities.md](equities.md)     | Retry, bilateral cancellation, or buy-in; option unit remains `Matured` until DvP completes  |
-| Barrier breach disputed                        | Observation held                   | If confirmed: process as triggered. If retracted: no state change; disputed observation logged |
-| Margin call fails (listed options)             | `TransferStatusEnum.Pending`       | Escalated to credit/risk; CCP default waterfall outside ledger scope                          |
+| Concept                         | CDM Type / Field                                                                                          |
+|---------------------------------|-----------------------------------------------------------------------------------------------------------|
+| Option product                  | `OptionPayout` within `ContractualProduct`; `BarrierInstructions` for barrier variants                    |
+| Inception (long)                | `EventQualificationEnum.Execution`                                                                        |
+| Premium                         | `Transfer` in the execution `BusinessEvent`                                                               |
+| Barrier observation             | Bespoke `BarrierObservationEvent` (state-only)                                                            |
+| Exercise notice                 | `EventQualificationEnum.Exercise`                                                                         |
+| Expiry — auto-exercise          | `EventQualificationEnum.Exercise`                                                                         |
+| Expiry — lapse                  | `EventQualificationEnum.ContractTermination` with `ClosedStateEnum.Lapsed`                                |
+| KO termination                  | `EventQualificationEnum.ContractTermination` with bespoke `ClosedStateEnum.BarrierKnockOut`               |
+| Cash settlement                 | `Transfer` in the settlement `BusinessEvent`                                                              |
+| Physical settlement             | `Transfer` with `PhysicalSettlementTerms`                                                                 |
+| Corporate-action adjustment     | Bespoke parameter-update event on the option `TradeState`                                                 |
+
+### CDM Extensions
+
+The compound unit state and bucketed/exercise-extended position state are global state-model features documented in [state.md](../state.md). The product-specific extensions required here are:
+
+1. **`ClosedStateEnum.BarrierKnockOut`** — distinguishes a KO termination from `Lapsed` or `Exercised`.
+2. **`EventQualificationEnum.BarrierObservation`** — first-class event type for barrier observations (both breach and non-breach), so the audit trail records the observation regardless of outcome. KI breach is a state event on the unit (sets `barrier_knocked` flag); KO breach drives termination.
+3. **Exercise sub-bucket extension to position state** — the `Live` / `Exercised(date)` / `Assigned(date)` partition. Required for American/Bermudan products; degenerate (always `Live`) for European.
+
+CDM reference: [Event Model](https://cdm.finos.org/docs/event-model/) · [Option Payout](https://cdm.finos.org/docs/product-model/) · [FINOS CDM GitHub](https://github.com/finos/common-domain-model)
+
+---
+
+## Relationship to Other Smart Contracts
+
+| Smart Contract       | Relationship                                                                                                                         |
+|----------------------|--------------------------------------------------------------------------------------------------------------------------------------|
+| Equities             | Underlying delivery in physical settlement (§5b) follows [equities.md](equities.md): DvP at CSD; corporate-action mechanics on the underlying drive option product-state adjustments |
+| Cash Payments        | The premium and cash settlements follow [cash_payments.md](cash_payments.md)                                                          |
+| Structured Products  | An option payoff component embedded in a structured note (e.g. a knock-in put in a reverse convertible) is governed by this document; lifecycle events propagate to the note via the QRL ladder per [structured_products.md](structured_products.md) |
+| QIS                  | A QIS composite unit may serve as the option underlying; the lifecycle is unchanged                                                  |
