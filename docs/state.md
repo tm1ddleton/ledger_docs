@@ -1,196 +1,219 @@
-# State Concepts: Unit, Product, and Position
+# State Concepts: Product, Unit, and Position
 
 ## Overview
 
-This document defines the three concepts that, together with the ledger, constitute the complete state of the system at any point in time: **Unit**, **Product**, and **Position**. The ledger records moves of units between wallets (see [invariants.md](invariants.md)); this document specifies what those units are, what governs them, and how a holder's exposure to them is summarised.
+This document is the canonical reference for the state model used by all smart contracts in this repository. Three orthogonal state objects — **Product state**, **Unit state**, and **Position state** — together with the ledger, constitute the complete state of the system at any point in time.
 
-The ledger is the immutable canonical record. Everything else — what a unit *is*, how it pays out, who holds how much in what settlement state — is derived state. This document specifies how that derived state is partitioned between the three concepts so that each smart contract can be expressed precisely in terms of the same primitives.
+**Smart contracts are stateless.** Each invocation receives the three state objects as inputs and returns the moves to be appended to the ledger along with updated state objects:
+
+```
+SmartContract(productState, unitState, positionState) → moves, updated states
+```
+
+The smart contract is agnostic to whether the ledger persists these state objects or recomputes them on demand from the move history — that is an implementation choice for the ledger. See [invariants.md](invariants.md) for the rules that constrain how the ledger is maintained.
+
+| Dimension          | Scope                                          | Describes                                                  | Examples                                                                       |
+|--------------------|------------------------------------------------|------------------------------------------------------------|--------------------------------------------------------------------------------|
+| **Product state**  | Per smart contract instance                    | *What* the instrument is                                   | `expiry = 2026-01-10`, `strike = 100`, `underlying = AAPL`, `ccp = LCH`        |
+| **Unit state**     | Per unit, uniform across all holders           | *What stage of life* the unit is in                        | `Active \| Coupon paid 2026-10-01 \| CAs: [split 2018-06-01, split 2022-08-15]` |
+| **Position state** | Per `(unit, wallet, counterparty wallet)` tuple | *Who holds how much, and where in the settlement pipeline* | A counter map by settlement bucket (see [Position State](#position-state))     |
+
+Product state and Unit state are the parameter values and lifecycle indicators of the instrument itself; neither depends on who holds the unit. Position state is the per-holder view.
 
 ---
 
-## Concepts
+## Product State
 
-### Unit
-
-A **Unit** is the representation of a given asset. Units are the things that move between wallets. Every move on the ledger transfers a quantity of a single Unit type from one wallet to another.
-
-Examples of Units:
-
-| Example                                                          | Smart Contract                                                  |
-|------------------------------------------------------------------|-----------------------------------------------------------------|
-| One share of `AAPL`                                              | [equities.md](smart_contracts/equities.md)                      |
-| One ESM6 future contract (E-mini S&P, June 2026)                 | [futures.md](smart_contracts/futures.md)                        |
-| One USD of cash                                                  | [cash_payments.md](smart_contracts/cash_payments.md)            |
-| One contract under a specific OTC equity option term sheet       | [equity_options.md](smart_contracts/equity_options.md)          |
-| One note of a defined structured payout                          | [structured_products.md](smart_contracts/structured_products.md)|
-
-A Unit is identified by an identifier (ISIN, exchange code, internal bespoke id) that all parties in the system agree on. **Unit state is identical for all instances of the Unit**: a share of `AAPL` held by Wallet A is in every respect equivalent to a share of `AAPL` held by Wallet B. When the Unit's state changes — e.g. on expiry — every instance held in every wallet is affected simultaneously.
-
-Units may be **compound**: a Unit may be defined by reference to another wallet (typically simulated) holding other Units — e.g. a total return swap written on a simulated wallet that holds the constituents of an index (see [qis.md](smart_contracts/qis.md)).
-
-### Product
-
-A **Product** is the subset of Unit state that defines the payout and other term-sheet variables of the Unit. It is the part of Unit state that the smart contract evaluates when computing cash flows, deliveries, or other lifecycle outputs.
+A smart contract's **terms** are encoded in the contract logic itself: a futures contract has *some* expiry date, *some* multiplier, *some* CCP; a barrier option has *some* knock-in barrier. **Product state** is the set of concrete parameter values bound to those terms for a specific instance.
 
 | Unit type             | Product state                                                                                                                                |
 |-----------------------|----------------------------------------------------------------------------------------------------------------------------------------------|
 | Cash equity           | Identifier, ISIN, listing currency, lot multiplier.                                                                                          |
-| Futures               | Underlying, contract size / multiplier, expiry date, settlement convention (cash / physical), last trading date.                             |
+| Futures               | Underlying, multiplier, expiry date, settlement convention (cash / physical), last trading date, CCP.                                        |
 | Equity option         | Underlying, strike, expiry, settlement type (cash / physical), option style (European / American), barriers, calculation agent.              |
-| Structured note       | Full term sheet: principal, observation schedule, payoff function, autocall barriers, coupon mechanics.                                      |
-| OTC IRS               | Notional, fixed/floating leg conventions, day-count, fixing schedule, payment dates, calculation agent.                                      |
+| Structured note       | Full term sheet: principal, observation schedule, payoff function, autocall barriers, coupon mechanics.                                       |
+| OTC IRS               | Notional, fixed/floating leg conventions, day-count, fixing schedule, payment dates, calculation agent.                                       |
 
-The Product is set at Unit creation and is immutable under normal lifecycle. It changes only via the cancel-and-correct amendment pattern (see [invariant 7](invariants.md#core-ledger-invariants)).
+Product state is set at unit creation and is immutable under normal lifecycle. It changes only via the cancel-and-correct amendment pattern (see [invariant 7](invariants.md#core-ledger-invariants)).
 
-### Unit Liveness
+---
 
-Beyond the Product, Unit state carries a **liveness** indicator that reflects where the Unit sits in its overall lifecycle. Liveness is global to the Unit — when the Unit matures, *every* instance held in *every* wallet matures simultaneously.
+## Unit State
 
-| Liveness  | Meaning                                                                                                                                            |
-|-----------|----------------------------------------------------------------------------------------------------------------------------------------------------|
-| `Active`  | The Unit is live: trading and lifecycle events are permitted; positions represent real economic exposures.                                         |
-| `Matured` | The Unit's final lifecycle event has been triggered (e.g. expiry, final fixing, full close-out) but settlement of the final move(s) is still open. |
-| `Expired` | The Unit's final settlement is complete; no further events are possible; the Unit identifier is retained only for audit.                           |
+Unit state is **compound** with three parts, all uniform across every holder of the unit:
 
-`Active → Matured` on the contractual trigger (expiry date, final fixing, full close-out). `Matured → Expired` once all final settlement moves reach `Settled`. CDM `closedState` is set at `Expired`.
+1. A **liveliness** component plus optional contingent flags.
+2. A **last-lifecycle-event marker** recording the most recent scheduled lifecycle event applied to the unit.
+3. A **corporate actions applied** list recording every corporate action ever applied to the unit.
 
-For some contracts (e.g. cash equities, perpetual instruments) there is no contractual maturity: the Unit remains `Active` until a corporate action or delisting extinguishes it.
+The canonical written form combines all three, e.g. `Active | Coupon paid 2026-10-01 | CAs: [split 2018-06-01, split 2022-08-15]`.
 
-### Corporate Action History
+A unit's state cannot differ by counterparty: a listed future cannot be `Active` for one party and `Matured` for another. That is the test for membership of Unit state — anything that varies by holder belongs in Position state instead.
 
-For Units that may be the subject of corporate actions — equities are the canonical case, but rights, structured notes carrying bespoke amendments, and others apply — the Unit state carries an **append-only history of corporate actions applied to the Unit**. Each entry records the action type (per CDM `CorporateActionTypeEnum`; see [equities.md](smart_contracts/equities.md)), the effective date, the action terms (e.g. split ratio, dividend per share, election outcomes), and a reference to the ledger transaction(s) that implemented it.
+### Liveliness
 
-The corporate-action history lives at the Unit level rather than the Position level because **every corporate action is applied atomically to all instances of the Unit**: a 2-for-1 stock split affects every share of `AAPL` in every wallet simultaneously, on the same ex-date, with the same multiplier; a cash dividend pays out to every holder on the same record date. Recording the history once per Unit avoids duplicating it across every Position and makes it impossible for two holders to disagree on which actions have been applied.
+| Liveliness | Meaning                                                                                                                       |
+|------------|-------------------------------------------------------------------------------------------------------------------------------|
+| `Active`   | The unit is live: trading and lifecycle events are permitted; positions represent real economic exposures.                    |
+| `Matured`  | The unit's final lifecycle event has been triggered (e.g. expiry, final fixing, full close-out) but settlement of the final move(s) is still open. |
+| `Expired`  | The unit's final settlement is complete; no further events are possible; the unit identifier is retained only for audit.      |
 
-The corporate-action history is the basis for adjustments applied to derivative Units that reference the affected underlying — see [equity_options.md](smart_contracts/equity_options.md) for the option-level adjustment treatment.
+`Active → Matured` on the contractual trigger. `Matured → Expired` once all final settlement moves reach `Settled`. CDM `closedState` is set at `Expired`.
 
-### Last Lifecycle Event
+Liveliness may be augmented by **contingent flags** that capture path-dependent state changes: `barrier_knocked_in`, `barrier_knocked_out`, etc. Flags are written in parentheses inside the liveliness slot, e.g. `Active (barrier_knocked_in)`. Flags are product-specific; see each `smart_contracts/*.md` for its flag set.
 
-The Unit state also records a reference to the **most recent lifecycle event** applied to the Unit — e.g. coupon payment on a bond, autocall observation on a structured note, corporate action on an equity, floating-rate fixing on an IRS.
+For some contracts (e.g. cash equities, perpetual instruments) there is no contractual maturity: the unit remains `Active` until a corporate action or delisting extinguishes it.
 
-As with corporate actions, lifecycle events that act on the Unit (rather than on individual positions) are applied atomically across all instances. Tracking only the *last* event by reference is sufficient: the full history is recoverable from the ledger by walking back through the chain of lifecycle events on the Unit, each of which references its predecessor.
+### Last-Lifecycle-Event Marker
 
-Together with the corporate-action history (the complete set of events of one specific type) and the liveness state (the overall trajectory of the Unit), the last-lifecycle-event reference provides the most operationally useful summary of where the Unit currently sits in its lifecycle: *what just happened*.
+The marker records the most recent **scheduled** lifecycle event applied to the unit — e.g. coupon payment on a bond, autocall observation on a structured note, EOD settlement on a future, floating-rate fixing on an IRS.
 
-### Why These Elements Are Unit-Level, Not Position-Level
+Because scheduled lifecycle events are known at inception (via the QRL observation / event ladder) and applied in a defined order, only the latest is retained. The full history is recoverable from the ledger by walking back through the chain of lifecycle-event transactions on the unit, each of which references its predecessor.
 
-The defining test for placing state at the Unit level rather than the Position level is **atomicity of application across all holders**: if an event affects every instance of the Unit simultaneously and identically, then the state it produces is global to the Unit, and there is no value in replicating it across every Position. Corporate actions, scheduled coupon payments, contractual fixings, and final settlement events all satisfy this test. Settlement bucket movements and cost-basis updates do not — they are intrinsically per-holder and therefore belong on the Position.
+Example markers:
 
-### Position
+| Marker                          | Set by                                                                       |
+|---------------------------------|------------------------------------------------------------------------------|
+| `Coupon paid 2026-10-01`        | A scheduled coupon payment on a bond or structured note                      |
+| `EOD settled 2026-05-04`        | A futures `DailySettlementEvent` for that business day                       |
+| `Fixing observed 2026-05-04`    | An IRS or QIS scheduled fixing observation                                   |
+| `Final settlement 2026-12-15`   | A contract-expiry final settlement event                                     |
 
-A **Position** is the exposure of a single (wallet, unit, counterparty) triple. Where Unit state is global, Position state is per-holder.
+The marker is the primary mechanism by which the smart contract enforces idempotent event delivery for scheduled events (see [invariant 10](invariants.md#core-ledger-invariants) and [Idempotent Event Delivery](#idempotent-event-delivery)).
 
-Position state answers three questions:
+### Corporate Actions Applied
 
-1. *How many units of this Unit does this wallet hold against this counterparty?*
-2. *In what settlement state are they?*
-3. *(For variation-margined products) what cost basis applies to them?*
+The CA list is an **append-only** record of every corporate action ever applied to the unit. Each entry records the action type (per CDM `CorporateActionTypeEnum`; see [equities.md](smart_contracts/equities.md)), the effective date, the action terms (e.g. split ratio, dividend per share, election outcomes), the resolution mode (`Automated` / `Override`), and a reference to the orchestrated ledger transaction that implemented it.
 
-The keying of a Position by counterparty matters for any contract where the counterparty determines settlement obligations distinctly: a holding of an OTC option face Counterparty A is a different position from one face Counterparty B, even when the underlying terms are identical. For centrally cleared and exchange-settled products the counterparty is fixed (e.g. the CCP, the CSD) and the Position degenerates to the (wallet, unit) pair.
+The full history is retained — not just the latest — because corporate actions:
+
+- are not generally known at inception (unlike scheduled lifecycle events);
+- are order-independent across distinct events; and
+- may be retroactively corrected (a restated dividend, a corrected R-value).
+
+Adjustments to a previously-applied corporate action are **never** in-place edits of the existing list entry; they arrive as a separate event with its own identifier and append to the CA list as a new entry, with the underlying ledger correction following the cancel-and-correct pattern of [invariant 7](invariants.md#core-ledger-invariants). The CA history is therefore monotonic — entries are appended, never mutated.
+
+Corporate actions apply atomically across all instances of the unit per [invariant 12](invariants.md#core-ledger-invariants) and the [Corporate Action Orchestration](invariants.md#corporate-action-orchestration) section. Recording the history once per unit avoids duplicating it across every position and makes it impossible for two holders to disagree on which actions have been applied. The list is also the basis for adjustments propagated to derivative units referencing the affected underlying — see [equity_options.md](smart_contracts/equity_options.md).
+
+### Why these are Unit-Level, Not Position-Level
+
+The defining test for placing state at the unit level rather than the position level is **atomicity of application across all holders**: if an event affects every instance of the unit simultaneously and identically, then the state it produces is global to the unit, and there is no value in replicating it across every position. Liveliness transitions, scheduled lifecycle events, and corporate actions all satisfy this test. Settlement bucket movements and cost-basis updates do not — they are intrinsically per-holder and therefore belong on the position.
 
 ---
 
 ## Position State
 
-Position state has two elements. Both may apply to a given contract, only one may apply, or neither in degenerate cases.
+A **position** is the aggregation of moves on the ledger that share the same `(unit, wallet, counterparty wallet)` tuple. The triple key matters: a holding of an OTC option facing Counterparty A is a distinct position from one facing Counterparty B even when the underlying terms are identical, so exposures facing different counterparties are not netted. For centrally cleared and exchange-settled products the counterparty is fixed (e.g. the CCP, the CSD) and the keying degenerates to `(unit, wallet)`.
 
-### Settlement-Cycle Bucket Vector
+Positions are supplied to the smart contract as input, just like Product state and Unit state. Whether the ledger persists positions or computes them on demand from move history is an implementation detail.
 
-For each (wallet, unit, counterparty), the Position holds a **vector of totals indexed by settlement-cycle bucket**. The bucket structure expresses how much of the position has reached or will reach `Settled` state, and on what value date.
+### Bucketed Counters
 
-The canonical bucket layout for a T+N settlement product:
+For each `(unit, wallet, counterparty wallet)` tuple, position state is a counter map keyed by settlement bucket:
 
-| Bucket           | Definition                                                                                                                                                     |
-|------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `SettledPrior`   | Total quantity settled on a value date strictly earlier than today.                                                                                            |
-| `SettlingToday`  | Total quantity whose contractual value date is today (i.e. T+0 from the holder's perspective today).                                                           |
-| `SettlingT+1`    | Total quantity contracted to settle one business day from today.                                                                                               |
-| `SettlingT+2`    | Total quantity contracted to settle two business days from today.                                                                                              |
-| …                | … one bucket per business day forward, out to the maximum standard cycle for the relevant market.                                                              |
-| `Failed`         | Total quantity for which a terminal `Failed` state has been recorded; excluded from all balance views per [invariant 8](invariants.md#core-ledger-invariants). |
+| Bucket          | Meaning                                                                                       |
+|-----------------|-----------------------------------------------------------------------------------------------|
+| `Settled`       | Quantity confirmed settled.                                                                   |
+| `Pending(date)` | Quantity expected to settle on the given date; one sub-bucket per anticipated settlement date. |
+| `Failed`        | Quantity for which a settlement attempt has terminally failed (per [invariant 8](invariants.md#core-ledger-invariants)). |
+
+Example: `{ Settled: 100, Pending(T+1): 20, Pending(T+2): 10, Failed: 40 }`.
 
 Each bucket total is signed: a long position contributes positive quantity, a short position contributes negative.
 
-The bucket vector evolves with two independent drivers:
+### v1: Optimistic, Aggregated Settlement
 
-1. **Time**: at the start of each business day, every forward bucket shifts one position closer — yesterday's `SettlingT+1` becomes today's `SettlingToday`, yesterday's `SettlingT+2` becomes today's `SettlingT+1`, and so on.
-2. **State transitions on the ledger**: a `Settled` confirmation moves quantity from `SettlingToday` into `SettledPrior`; a settlement attempt failure (`Instructed → Pending`) leaves the quantity in `SettlingToday` so that retries continue against the live balance; a terminal `Failed` state moves quantity into the `Failed` bucket.
+In v1 there is no settlement-system feed, and many real-world settlements (e.g. cash equity CSD net settlement) cannot be tied back to individual moves. Therefore:
 
-The two balance views defined in [invariant 9](invariants.md#core-ledger-invariants) are derived directly from the bucket vector:
+- Per-move CDM settlement states (`Expected`, `Instructed`, `Pending`, `Settled`, `Failed`) are not tracked on individual moves; quantities are aggregated into the position-state buckets above.
+- On the anticipated settlement date, the system **optimistically** transitions `Pending(D) → Settled` without external confirmation.
+- Users may send reallocation messages between buckets to record exceptions (e.g. `Pending(T+1) → Failed`), subject to [invariant 8](invariants.md#core-ledger-invariants).
+- The richer per-move CDM model remains the target end-state and the reference vocabulary in [events.md](events.md).
 
-- **Settled balance** = `SettledPrior`.
-- **Live balance** = `SettledPrior` + Σ all forward `Settling*` buckets.
+### Why Bucketed Counters, Not Per-Move State
 
-`Failed` quantities contribute to neither.
+Aggregating settlement state into per-position counters is not only a v1 simplification — it is more truthful than the per-`Transfer` state model used by CDM whenever settlement is netted. A CSD that nets ten clips of ten shares each into a single delivery instruction and reports a 50-share fail does not, and cannot, tell us which of the ten underlying transfers failed. Recording a settlement state per individual transfer therefore requires the implementer to invent an allocation rule (FIFO, pro-rata, operational override) whose result is fictional with respect to the source data and will diverge between systems applying different rules. The counter model records exactly what the CSD said — `Failed` increments by 50 on the relevant `(unit, wallet, counterparty wallet)` position — and pushes per-clip attribution out of the canonical state and into a downstream reconciliation activity.
 
-### Total Cost Basis (Variation-Margined Products)
+### Balance Views
 
-For products where P&L is crystallised through daily cash settlement rather than carried as unrealised gain — i.e. listed futures, and any other contract that implements daily VM against a CCP — the Position also carries a **total cost basis** scalar:
+Two balance views are derived from position state per [invariant 9](invariants.md#core-ledger-invariants):
 
-```
-TotalCostBasis = Σ (price_i × quantity_i × multiplier)
-```
+- **Settled balance** (the CSD's view) = the `Settled` bucket.
+- **Live balance** (the trade-date view, consumed by risk, valuation, and operations) = `Settled` + Σ all `Pending(date)` sub-buckets.
 
-summed over **all trades — settled and unsettled — that contribute to the current position**.
+The `Failed` bucket is excluded from both views.
 
-The cost basis is the reference against which VM is computed. For a daily-settled product:
+### Implications for Lifecycle Events
 
-```
-Daily VM = (current reference price × quantity × multiplier) − TotalCostBasis
-```
-
-After VM is paid at EOD, the cost basis is reset to the day's mark:
-
-```
-TotalCostBasis ← settlement_price × quantity × multiplier
-```
-
-so that the next day's VM measures the day-on-day change in the reference price only, and not the cumulative P&L since trade date. This reset is the ledger expression of the daily P&L crystallisation that is the defining feature of futures.
-
-### Why the Two Models Are Different
-
-The bucket-vector model and the cost-basis model serve different products because their economic obligations differ.
-
-- For a **delivery-settled product** (equities, bonds, FX spot/forward), the question that matters operationally is *when does each lot settle*. Once settled, the holding is a clean static balance. The bucket vector captures everything needed; cost basis is an accounting concept maintained off-ledger.
-- For a **daily-margined product** (futures), the unit moves are written `Settled` at execution (see [Exchange Trade Booking Model](invariants.md#exchange-trade-booking-model)), so the bucket vector degenerates to a single bucket. What matters instead is the cost basis against which VM is computed and reset each evening.
-
-Some products combine both: a physically deliverable future carries a cost basis up to expiry, then triggers a delivery transaction that itself runs through a settlement-bucket cycle (see [futures.md](smart_contracts/futures.md)).
+Events that depend on holdings consult the relevant bucket of position state. For example, on a dividend record date, only the `Settled` bucket of the recipient's `(unit, wallet, counterparty wallet)` position is eligible for the dividend; quantities still in `Pending(D)` on record date do not receive the dividend, and the seller — whose `Settled` balance has not yet been reduced — retains eligibility for those shares.
 
 ---
 
-## Per-Contract Position State
+## Product-Specific State Extensions
 
-This section specifies, for each smart contract in the repository, which Position-state elements apply and at what granularity.
+The schema above is the global skeleton. Each smart contract may extend it with product-specific fields. The extensions live alongside the global components; they do not replace them.
 
-| Smart contract                                                | Bucket vector | Cost basis scalar | Notes                                                                                                                    |
-|---------------------------------------------------------------|---------------|-------------------|--------------------------------------------------------------------------------------------------------------------------|
-| [Cash equities](smart_contracts/equities.md)                  | Yes           | No                | T+1 standard cycle in most markets. Failures are reflected by the `Failed` bucket per invariant 8.                       |
-| [Futures](smart_contracts/futures.md)                         | Degenerate    | Yes               | Unit moves written `Settled` at execution; the bucket vector collapses to a single net total. Cost basis resets nightly. |
-| [Bonds](smart_contracts/bonds.md)                             | Yes           | No                | T+2 standard cycle; failure resolution paths as for equities.                                                            |
-| [Equity options](smart_contracts/equity_options.md)           | Yes           | No                | Premium and exercise/expiry cash flows settle through the bucket cycle.                                                  |
-| [FX (spot, forward, swap, NDF)](smart_contracts/fx.md)        | Yes           | No                | Cycle length depends on value date; payment netting compresses the vector across counterparties.                         |
-| [IRS](smart_contracts/irs.md)                                 | Yes           | No                | Each periodic payment passes through the bucket cycle on its payment date.                                               |
-| [Structured products](smart_contracts/structured_products.md) | Yes           | No                | Per-coupon and final-redemption cash flows pass through the bucket cycle on their value dates.                           |
-| [QIS](smart_contracts/qis.md)                                 | Yes           | No                | Simulated wallet movements are recorded but settle off-cycle per the strategy definition.                                |
-| [Cash payments](smart_contracts/cash_payments.md)             | Yes           | No                | The `Expected → Pending → Instructed → Settled` flow drives the bucket transitions.                                      |
-| [SBL](smart_contracts/stock_borrow_loan.md)                   | Yes           | No                | Collateral margin call and return cycle map onto bucket movements.                                                       |
-| [Funding](smart_contracts/funding.md)                         | Yes           | No                | Notional reset and IFR rate changes do not require a cost basis on the ledger.                                           |
+### Unit State Extensions
 
-Where a contract introduces a new margining mechanism (e.g. initial margin recorded on the ledger, or future VM extensions to cleared OTC contracts), the cost-basis pattern documented here is to be applied.
+Examples of product-specific unit-state flags:
+
+| Smart contract                                            | Flag(s)                                                              |
+|-----------------------------------------------------------|----------------------------------------------------------------------|
+| [Equity options](smart_contracts/equity_options.md)       | `barrier_knocked_in`, `barrier_knocked_out`                          |
+| [Structured products](smart_contracts/structured_products.md) | `barrier_knocked`, autocall trigger flags                          |
+
+### Position State Extensions
+
+Examples of product-specific position-state scalars:
+
+| Smart contract                                | Extension              | Purpose                                                                                                                  |
+|-----------------------------------------------|------------------------|--------------------------------------------------------------------------------------------------------------------------|
+| [Futures](smart_contracts/futures.md)         | `costBasis` (scalar)   | Running `Σ (price × multiplier × quantity)` for the current position. Drives daily VM; reset to `S × multiplier × N` at each EOD. |
+
+The futures cost basis is the canonical example: a delivery-settled product needs only the bucketed counters because once units are `Settled` the position is a static holding, but a daily-margined product crystallises P&L continuously and so requires a per-position scalar against which today's mark can be differenced.
+
+### Per-Contract Summary
+
+| Smart contract                                                  | Position-state extension | Unit-state flags                                  | Notes                                                                                            |
+|-----------------------------------------------------------------|--------------------------|---------------------------------------------------|--------------------------------------------------------------------------------------------------|
+| [Cash equities](smart_contracts/equities.md)                    | —                        | —                                                 | T+1 standard cycle in most markets. Dividend eligibility uses the `Settled` bucket on record date. |
+| [Futures](smart_contracts/futures.md)                           | `costBasis`              | —                                                 | Unit moves written `Settled` at execution; bucketed counters collapse to a single `Settled` total. |
+| [Bonds](smart_contracts/bonds.md)                               | —                        | —                                                 | T+2 standard cycle; failure resolution paths as for equities.                                    |
+| [Equity options](smart_contracts/equity_options.md)             | exercise sub-bucket      | `barrier_knocked_in`, `barrier_knocked_out`       | Per-position exercise state layered onto the settlement-bucket counters.                         |
+| [FX (spot, forward, swap, NDF)](smart_contracts/fx.md)          | —                        | —                                                 | Cycle length depends on value date; payment netting compresses the counter across counterparties. |
+| [IRS](smart_contracts/irs.md)                                   | —                        | —                                                 | Each periodic payment passes through the bucket cycle on its payment date.                       |
+| [Structured products](smart_contracts/structured_products.md)   | —                        | `barrier_knocked`, autocall flags                 | Per-coupon and final-redemption cash flows pass through the bucket cycle on their value dates.    |
+| [QIS](smart_contracts/qis.md)                                   | —                        | —                                                 | Simulated wallet movements are recorded but settle off-cycle per the strategy definition.        |
+| [Cash payments](smart_contracts/cash_payments.md)               | —                        | —                                                 | The `Expected → Pending → Instructed → Settled` flow (where tracked) drives the bucket transitions. |
+| [SBL](smart_contracts/stock_borrow_loan.md)                     | —                        | —                                                 | Collateral margin call and return cycle map onto bucket movements.                               |
+| [Funding](smart_contracts/funding.md)                           | —                        | —                                                 | Notional reset and IFR rate changes do not require an extension.                                 |
+
+Where a contract introduces a new margining mechanism (e.g. initial margin recorded on the ledger, or future VM extensions to cleared OTC contracts), the cost-basis pattern documented for futures is to be applied.
+
+---
+
+## Idempotent Event Delivery
+
+Per [invariant 10](invariants.md#core-ledger-invariants), feeding the same event to a smart contract must produce no additional moves and must leave the returned states unchanged. The unit-state components are the mechanism by which smart contracts enforce this:
+
+- For **scheduled lifecycle events** (coupon, fixing, EOD settlement, expiry), the smart contract consults the **last-lifecycle-event marker**. If the marker already records the event being delivered, the invocation returns a no-op.
+- For **corporate actions**, the smart contract consults the **corporate-actions-applied list**. If the event's identifier is already in the list, the invocation returns a no-op.
+
+This protects against duplicate notifications from upstream feeds (a fixing republished, a settlement price re-fed, a CA event re-delivered) without conflating them with deliberate corrections. Deliberate corrections arrive as separate events with their own identifiers and follow the cancel-and-correct pattern.
 
 ---
 
 ## State Versus Ledger
 
-The ledger is canonical; Unit, Product, and Position state are all derivable from it.
+The ledger is canonical; all three state objects are derivable from it.
 
 | State element                | Derivation                                                                                                                                                      |
 |------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Product                      | Set at Unit creation event; updated only through the cancel-and-correct amendment pattern.                                                                      |
-| Liveness                     | Set at Unit creation as `Active`; advanced by lifecycle events recorded as transactions on the ledger.                                                          |
-| Corporate-action history     | Appended each time a corporate action transaction is recorded against the Unit; entries reference the transaction(s) that implemented the action.               |
-| Last lifecycle event         | Pointer to the most recent lifecycle-event transaction recorded against the Unit; each event references its predecessor so the chain is recoverable.            |
-| Position bucket vector       | Aggregation of moves on the ledger by (wallet, unit, counterparty), partitioned by current move state and value date.                                           |
-| Position cost basis          | For VM products, Σ (price × quantity × multiplier) over the contributing trades. The EOD reset is recorded on the ledger as part of the daily settlement event. |
+| Product state                | Set at unit creation; updated only through the cancel-and-correct amendment pattern.                                                                            |
+| Liveliness                   | Set at unit creation as `Active`; advanced by lifecycle events recorded as transactions on the ledger.                                                          |
+| Last-lifecycle-event marker  | Updated each time a scheduled lifecycle event is recorded against the unit; reflects only the most recent event by reference.                                   |
+| Corporate-actions applied    | Appended each time a corporate-action transaction is recorded against the unit; entries reference the transaction(s) that implemented the action.               |
+| Position bucketed counters   | Aggregation of moves on the ledger by `(unit, wallet, counterparty wallet)`, partitioned by current settlement bucket.                                          |
+| Position cost basis (futures) | `Σ (price × multiplier × quantity)` over the contributing trades. The EOD reset is recorded on the ledger as part of the daily settlement event.               |
 
-Position state is therefore a view computed over the ledger; it is not a separate authoritative store. Every change to Position state is the consequence of a recorded move or state transition on the ledger.
+State is therefore a view computed over the ledger; it is not a separate authoritative store. Every change to state is the consequence of a recorded move or state transition on the ledger.

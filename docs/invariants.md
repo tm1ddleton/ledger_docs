@@ -4,6 +4,18 @@ These invariants hold for all smart contracts and all transactions recorded in t
 
 ---
 
+## State Model
+
+Smart contracts are **stateless**. To evaluate a smart contract, three orthogonal state objects — **Product state**, **Unit state**, and **Position state** — are supplied as inputs; the contract returns moves to be appended to the ledger and updated state objects.
+
+```
+SmartContract(productState, unitState, positionState) → moves, updated states
+```
+
+The full definition of the three state dimensions, the compound shape of unit state, the bucketed-counter model for position state, the rationale for that model, the v1 optimistic settlement convention, and product-specific extensions are all documented in **[state.md](state.md)**. The invariants in this document refer to `state.md` for terminology and reference its components by name.
+
+---
+
 ## Core Ledger Invariants
 
 1. **Immutability**: Moves, once written to the ledger, are immutable. State transitions are recorded as new events that reference the original move; the original record is never modified or deleted.
@@ -22,7 +34,58 @@ These invariants hold for all smart contracts and all transactions recorded in t
 
 8. **Two-tier settlement failure and balance exclusion**: A settlement failure notification does not by itself extinguish a trade's legal obligation. Move states therefore distinguish between a non-terminal failed attempt (`TransferStatusEnum.Pending` — the obligation persists and settlement will be retried) and a terminal outcome (`TransferStatusEnum.Failed` — the obligation has been definitively extinguished by mutual agreement or forced resolution such as a buy-in). `Failed` moves are excluded from all wallet balance calculations. Because `Failed` moves never contributed to a settled balance, no reversal transaction is needed when moves reach `Failed` state — the balance is automatically correct. The specific resolution paths — retry, bilateral cancellation, and buy-in — are documented per smart contract.
 
-9. **Wallet balance views**: Two balance views are derived from the ledger. The **settled balance** (the CSD's view) counts only `Settled` moves. The **live balance** (the trade-date view consumed by risk, valuation, and operations) counts `Expected`, `Instructed`, `Pending`, and `Settled` moves. `Failed` moves are excluded from both views. `Expected` is a bespoke state used only for anticipated receipts where the amount is calculable before the payer has instructed (see [cash_payments.md](smart_contracts/cash_payments.md)); it has no direct CDM equivalent. All downstream systems must specify which view they consume.
+9. **Wallet balance views**: Two balance views are derived from position state (see State Model). The **settled balance** (the CSD's view) counts only the `Settled` bucket. The **live balance** (the trade-date view consumed by risk, valuation, and operations) counts the `Settled` bucket plus all `Pending(date)` buckets. The `Failed` bucket is excluded from both views (per invariant 8). All downstream systems must specify which view they consume.
+
+10. **Idempotent event delivery**: Feeding the same event to a smart contract must be idempotent. Replaying an event (same event identifier and payload) against the same input states must produce no additional moves and must leave the returned states unchanged. Smart contracts enforce this by consulting the appropriate component of unit state before generating moves: the *last-lifecycle-event marker* for scheduled lifecycle events (coupon, fixing, EOD settlement, expiry, etc.), and the *corporate actions applied* list for corporate actions. If the event is already recorded as applied, the smart contract returns a no-op. Adjustments to a previously-applied corporate action are never in-place modifications of the existing state entry; they arrive as a separate event with its own identifier (typically a cancel/correct per [invariant 7](#core-ledger-invariants)) and append to the CA list as a new entry. This protects against duplicate notifications from upstream feeds (a fixing republished, a settlement price re-fed, a CA event re-delivered) without conflating them with deliberate corrections.
+
+11. **Booking model is exogenous to the smart contract**: How trades are routed across internal wallets — for example, whether a structured note is held in a single book or split across separate issuance and hedging books, or whether equity inventory sits with the trading desk that bought it or with a central inventory wallet — is a booking decision, not a smart contract responsibility. The smart contract is concerned only with the payoff (encoded in product state), the lifecycle events delivered by the [QRL](events.md) observation / event ladder, and the resulting moves between the wallets it is presented with. Documents in `smart_contracts/*.md` may describe representative booking patterns for clarity, but those patterns are not normative; the same smart contract must produce the same lifecycle moves regardless of the chosen booking structure.
+
+12. **Atomic corporate-action application across an ISIN**: All listing-level corporate-action records for the same `(ISIN, ex-date, action-type)` triple must apply within a single ledger transaction. Either every subscribed position sharing the ISIN is updated (with its position-level override or the automated value, per the [Corporate Action Orchestration](#corporate-action-orchestration) section) or none are. Partial application across positions is not permitted; failure of any per-position resolution rolls back the entire transaction, which is then resolved by reconfiguration (e.g. correcting an override) and re-applied.
+
+---
+
+## Corporate Action Orchestration
+
+Corporate actions on listed equities (and other underlyings that admit them) affect every product whose state references that underlying — direct equity holdings, option strike and multiplier, structured-product underlyings, QIS basket constituents. Application must be coordinated so that all affected products see a consistent state across the ledger.
+
+### Subscription
+
+Subscriptions to corporate actions are recorded at **product creation**. When a smart contract creates a product instance whose product state references a listing, the ledger records a subscription `(productInstance → listing)`. Subsequent corporate-action events on that listing are evaluated against every subscribed product instance.
+
+Products referencing multiple listings (e.g. a basket option, a QIS composite, a dual-listed underlying) record one subscription per referenced listing.
+
+### Definition vs application granularity
+
+| Layer         | Granularity                                                                                                                                                |
+|---------------|------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Definition    | **Per listing.** A single ISIN-level event (e.g. a stock split) may have multiple listing-level records — one per venue — capturing per-listing variations such as cash amounts after FX, ex-dates, withholding rules, and deliverable units. |
+| Application   | **Per ISIN, atomically** (per [invariant 12](#core-ledger-invariants)). All listing-level records for the same `(ISIN, ex-date, action-type)` triple apply within a single ledger transaction across every subscribed position. |
+| Override      | **Per position.** Overrides are keyed by `(unit, wallet, counterparty wallet)`. Since a position references a specific listing, overrides are implicitly listing-specific.                                                                |
+
+### Modes
+
+A `CorporateAction` event delivered by [QRL](events.md#qrl-issued-events) carries the per-listing adjustment values. For each affected position the smart contract resolves the value to apply in this order:
+
+1. **Override** — a position-level override registered before the ex-date (see Timing) supersedes the automated value for that position only.
+2. **Automated** — otherwise the QRL-computed adjustment is applied.
+
+The smart contract is mode-agnostic: it applies whichever value the resolution produces. The mode is recorded as provenance on the resulting moves and on the unit-state marker (e.g. `Corporate action 2026-04-12 [override:user-123]`).
+
+### Override timing
+
+| Stage              | Action                                                                                                                       |
+|--------------------|------------------------------------------------------------------------------------------------------------------------------|
+| Before ex-date     | Overrides may be configured against any subscribed position. Multiple positions in the same ISIN may carry overrides independently; positions without an override take the automated value. |
+| At ex-date         | The orchestrated CA transaction applies atomically across all subscribed positions, resolving each per the Modes order above. |
+| After ex-date      | A late override or correction is applied as a cancel/correct of the original CA transaction per [invariant 7](#core-ledger-invariants). There is no in-place modification of the applied transaction; the cancel/correct path preserves the audit trail. |
+
+Pre-ex-date override configuration arrives as a message from an upstream UI; the ledger accepts it and stores it against the relevant `(position, ISIN, ex-date, action-type)` key. Configuration is rejected once the ex-date orchestration has been posted.
+
+### Idempotency and adjustments
+
+CA application is idempotent per [invariant 10](#core-ledger-invariants), enforced via the *corporate actions applied* list on unit state (see [State Model](#state-model)). When a `CorporateAction` event is delivered, the smart contract checks the list for an entry matching the event's identifier; if present, the smart contract returns a no-op. On successful application, a new entry is appended to the list capturing the action type, ex-date, mode (`Automated` / `Override`), and a reference to the orchestrated transaction.
+
+Adjustments to a previously-applied corporate action — for example, a re-stated cash dividend amount, a corrected R-value, or a late position-level override — are **never** in-place edits of the existing CA list entry. They arrive as a separate `CorporateAction` event with its own identifier and append to the CA list as a new entry. The underlying ledger correction follows [invariant 7](#core-ledger-invariants): the original orchestrated transaction is reversed and a corrected transaction is posted, preserving the full audit trail. This keeps the unit state's CA history monotonic — entries are appended, never mutated — while accommodating retroactive corrections cleanly.
 
 ---
 
