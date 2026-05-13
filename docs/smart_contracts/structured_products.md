@@ -47,7 +47,7 @@ Nested payoff components are inputs to the structured product's payoff function 
 
 ### Unit State
 
-Unit state is compound: a liveliness component and a last-lifecycle-event marker, written together as e.g. `Active | Coupon paid 2026-01-15` or `Active (barrier_knocked) | Barrier observed 2026-02-15`.
+Unit state is compound with three parts — liveliness, last-lifecycle-event marker, and corporate-actions-applied list — per the global model in [state.md](../state.md), written together as e.g. `Active | Coupon paid 2026-01-15 | CAs: []` or `Active (barrier_knocked) | Barrier observed 2026-02-15 | CAs: [split 2025-08-15]`. Where the product references one or more equity underlyings, corporate actions on those underlyings propagate to the structured product via the [Corporate Action Orchestration](../invariants.md#corporate-action-orchestration) model and are appended to the product unit's CA list.
 
 Liveliness:
 

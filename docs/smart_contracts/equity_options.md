@@ -58,7 +58,7 @@ For double-barrier options, `barrier.level` is a pair (upper, lower).
 
 ### Unit State
 
-Unit state is compound: a liveliness component and a last-lifecycle-event marker, written together as e.g. `Active | Barrier observed 2026-02-15` or `Active (barrier_knocked_in) | Exercise notice 2026-04-10`.
+Unit state is compound with three parts — liveliness, last-lifecycle-event marker, and corporate-actions-applied list — per the global model in [state.md](../state.md), written together as e.g. `Active | Barrier observed 2026-02-15 | CAs: []` or `Active (barrier_knocked) | Exercise notice 2026-04-10 | CAs: [split 2025-08-15]`. Corporate actions on the underlying propagate to the option via the [Corporate Action Orchestration](../invariants.md#corporate-action-orchestration) model and are appended to the option unit's CA list.
 
 Liveliness:
 
@@ -70,10 +70,9 @@ Liveliness:
 
 Contingent flags carried within the liveliness component:
 
-| Flag                  | Set by                                                                              |
-|-----------------------|-------------------------------------------------------------------------------------|
-| `barrier_knocked_in`  | A KI barrier observation event in which the barrier is breached (option remains `Active`) |
-| `barrier_knocked_out` | A KO barrier observation event in which the barrier is breached (drives `Active → Matured`) |
+| Flag              | Set by                                                                                                          |
+|-------------------|-----------------------------------------------------------------------------------------------------------------|
+| `barrier_knocked` | A barrier observation event in which the barrier is breached. For KI: option remains `Active`. For KO: drives `Active → Matured`. |
 
 Last-lifecycle-event marker — examples:
 
@@ -165,8 +164,8 @@ The premium is the only cash flow this smart contract creates at inception; any 
 State-only event — no cash or unit moves are generated.
 
 - **No breach**: liveliness unchanged. Marker → `Barrier observed YYYY-MM-DD`.
-- **KI breach** (first occurrence): contingent flag `barrier_knocked_in` set; liveliness remains `Active`. Marker → `Barrier observed YYYY-MM-DD`.
-- **KO breach**: contingent flag `barrier_knocked_out` set; liveliness `Active → Matured`. The KO terminates the option — see §6 KO Termination.
+- **KI breach** (first occurrence): contingent flag `barrier_knocked` set; liveliness remains `Active`. Marker → `Barrier observed YYYY-MM-DD`.
+- **KO breach**: contingent flag `barrier_knocked` set; liveliness `Active → Matured`. The KO terminates the option — see §6 KO Termination.
 
 For double-barrier products the smart contract evaluates both levels at each observation. Continuous and discrete monitoring differ only in event source and timing; the smart contract logic is identical.
 
@@ -196,7 +195,7 @@ Call payoff = max(S_T − strike, 0)
 Put  payoff = max(strike − S_T, 0)
 ```
 
-For a KI option with no `barrier_knocked_in` flag set: payoff is forced to zero (the option never activated).
+For a KI option with no `barrier_knocked` flag set: payoff is forced to zero (the option never activated).
 
 For all `Live` quantity at expiry:
 
@@ -313,7 +312,7 @@ Where no standard determination applies, parties may agree a bespoke treatment r
 The compound unit state and bucketed/exercise-extended position state are global state-model features documented in [state.md](../state.md). The product-specific extensions required here are:
 
 1. **`ClosedStateEnum.BarrierKnockOut`** — distinguishes a KO termination from `Lapsed` or `Exercised`.
-2. **`EventQualificationEnum.BarrierObservation`** — first-class event type for barrier observations (both breach and non-breach), so the audit trail records the observation regardless of outcome. KI breach is a state event on the unit (sets `barrier_knocked_in` flag); KO breach drives termination.
+2. **`EventQualificationEnum.BarrierObservation`** — first-class event type for barrier observations (both breach and non-breach), so the audit trail records the observation regardless of outcome. KI breach is a state event on the unit (sets `barrier_knocked` flag); KO breach drives termination.
 3. **Exercise sub-bucket extension to position state** — the `Live` / `Exercised(date)` / `Assigned(date)` partition. Required for American/Bermudan products; degenerate (always `Live`) for European.
 
 CDM reference: [Event Model](https://cdm.finos.org/docs/event-model/) · [Option Payout](https://cdm.finos.org/docs/product-model/) · [FINOS CDM GitHub](https://github.com/finos/common-domain-model)

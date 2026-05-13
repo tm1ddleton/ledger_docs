@@ -60,7 +60,7 @@ A unit's state cannot differ by counterparty: a listed future cannot be `Active`
 
 `Active → Matured` on the contractual trigger. `Matured → Expired` once all final settlement moves reach `Settled`. CDM `closedState` is set at `Expired`.
 
-Liveliness may be augmented by **contingent flags** that capture path-dependent state changes: `barrier_knocked_in`, `barrier_knocked_out`, etc. Flags are written in parentheses inside the liveliness slot, e.g. `Active (barrier_knocked_in)`. Flags are product-specific; see each `smart_contracts/*.md` for its flag set.
+Liveliness may be augmented by **contingent flags** that capture path-dependent state changes, e.g. `barrier_knocked`. Flags are written in parentheses inside the liveliness slot, e.g. `Active (barrier_knocked)`. Flags are product-specific; see each `smart_contracts/*.md` for its flag set.
 
 For some contracts (e.g. cash equities, perpetual instruments) there is no contractual maturity: the unit remains `Active` until a corporate action or delisting extinguishes it.
 
@@ -121,18 +121,17 @@ Example: `{ Settled: 100, Pending(T+1): 20, Pending(T+2): 10, Failed: 40 }`.
 
 Each bucket total is signed: a long position contributes positive quantity, a short position contributes negative.
 
-### v1: Optimistic, Aggregated Settlement
+### Moves Are Fungible: A Deliberate Departure From CDM
 
-In v1 there is no settlement-system feed, and many real-world settlements (e.g. cash equity CSD net settlement) cannot be tied back to individual moves. Therefore:
+Settlement state lives **on the position**, not on individual moves. This is a deliberate departure from CDM, which carries a `TransferStatusEnum` per `Transfer`. The CDM per-move model is fictional whenever settlement is netted: a CSD that nets ten clips of ten shares each into a single delivery instruction and reports a 50-share fail does not, and cannot, tell us which of the ten underlying transfers failed. Recording a settlement state per individual move therefore requires the implementer to invent an allocation rule (FIFO, pro-rata, operational override) whose result is fictional with respect to the source data and will diverge between systems applying different rules.
 
-- Per-move CDM settlement states (`Expected`, `Instructed`, `Pending`, `Settled`, `Failed`) are not tracked on individual moves; quantities are aggregated into the position-state buckets above.
-- On the anticipated settlement date, the system **optimistically** transitions `Pending(D) → Settled` without external confirmation.
-- Users may send reallocation messages between buckets to record exceptions (e.g. `Pending(T+1) → Failed`), subject to [invariant 8](invariants.md#core-ledger-invariants).
-- The richer per-move CDM model remains the target end-state and the reference vocabulary in [events.md](events.md).
+We treat moves as **fungible** within a `(unit, wallet, counterparty wallet)` position. The counter model records exactly what the CSD said — `Failed` increments by 50 on the relevant position — and pushes per-clip attribution out of the canonical state and into a downstream reconciliation activity.
 
-### Why Bucketed Counters, Not Per-Move State
+Operational consequences:
 
-Aggregating settlement state into per-position counters is not only a v1 simplification — it is more truthful than the per-`Transfer` state model used by CDM whenever settlement is netted. A CSD that nets ten clips of ten shares each into a single delivery instruction and reports a 50-share fail does not, and cannot, tell us which of the ten underlying transfers failed. Recording a settlement state per individual transfer therefore requires the implementer to invent an allocation rule (FIFO, pro-rata, operational override) whose result is fictional with respect to the source data and will diverge between systems applying different rules. The counter model records exactly what the CSD said — `Failed` increments by 50 on the relevant `(unit, wallet, counterparty wallet)` position — and pushes per-clip attribution out of the canonical state and into a downstream reconciliation activity.
+- Per-move CDM settlement states (`Expected`, `Instructed`, `Pending`, `Settled`, `Failed`) are not tracked on individual moves; quantities are aggregated into the position-state buckets above. CDM `TransferStatusEnum` values remain useful as the **vocabulary** for events in [events.md](events.md), but the canonical state is the position-state bucket.
+- On the anticipated settlement date, the system transitions `Pending(D) → Settled` optimistically; settlement-feed messages, where available, drive exceptions back out (e.g. `Pending(T+1) → Failed`), subject to [invariant 8](invariants.md#core-ledger-invariants).
+- Users may also send reallocation messages directly between buckets to record exceptions.
 
 ### Balance Views
 
@@ -159,8 +158,8 @@ Examples of product-specific unit-state flags:
 
 | Smart contract                                            | Flag(s)                                                              |
 |-----------------------------------------------------------|----------------------------------------------------------------------|
-| [Equity options](smart_contracts/equity_options.md)       | `barrier_knocked_in`, `barrier_knocked_out`                          |
-| [Structured products](smart_contracts/structured_products.md) | `barrier_knocked`, autocall trigger flags                          |
+| [Equity options](smart_contracts/equity_options.md)       | `barrier_knocked`                                                    |
+| [Structured products](smart_contracts/structured_products.md) | `barrier_knocked`, autocall trigger flags                        |
 
 ### Position State Extensions
 
@@ -179,7 +178,7 @@ The futures cost basis is the canonical example: a delivery-settled product need
 | [Cash equities](smart_contracts/equities.md)                    | —                        | —                                                 | T+1 standard cycle in most markets. Dividend eligibility uses the `Settled` bucket on record date. |
 | [Futures](smart_contracts/futures.md)                           | `costBasis`              | —                                                 | Unit moves written `Settled` at execution; bucketed counters collapse to a single `Settled` total. |
 | [Bonds](smart_contracts/bonds.md)                               | —                        | —                                                 | T+2 standard cycle; failure resolution paths as for equities.                                    |
-| [Equity options](smart_contracts/equity_options.md)             | exercise sub-bucket      | `barrier_knocked_in`, `barrier_knocked_out`       | Per-position exercise state layered onto the settlement-bucket counters.                         |
+| [Equity options](smart_contracts/equity_options.md)             | exercise sub-bucket      | `barrier_knocked`                                 | Per-position exercise state layered onto the settlement-bucket counters.                         |
 | [FX (spot, forward, swap, NDF)](smart_contracts/fx.md)          | —                        | —                                                 | Cycle length depends on value date; payment netting compresses the counter across counterparties. |
 | [IRS](smart_contracts/irs.md)                                   | —                        | —                                                 | Each periodic payment passes through the bucket cycle on its payment date.                       |
 | [Structured products](smart_contracts/structured_products.md)   | —                        | `barrier_knocked`, autocall flags                 | Per-coupon and final-redemption cash flows pass through the bucket cycle on their value dates.    |

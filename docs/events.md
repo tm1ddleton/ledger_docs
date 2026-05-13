@@ -80,7 +80,7 @@ Per [invariant 10](invariants.md#core-ledger-invariants), each event is delivere
 |------------------------------------------------|-------|-------|-------|-------|-------|-------|-------|-------|-------|-------|-------|
 | EOD Settlement — VM Allocation (Tier 1)        |       | ✓     |       |       |       |       |       |       |       |       |       |
 | EOD Settlement — VM External Payment (Tier 2)  |       | ✓     |       |       |       |       |       |       |       |       |       |
-| NewTrade → RunningPosition Transition          |       | ✓     |       |       |       |       |       |       |       |       |       |
+| EOD Settlement — Cost-Basis Reset              |       | ✓     |       |       |       |       |       |       |       |       |       |
 | Notional Reset / Revaluation                   |       |       | ✓     |       |       |       |       |       |       |       |       |
 | SBL Collateral Margin Call / Return            |       |       |       |       |       |       |       |       |       |       | ✓     |
 | IFR Rate Change                                |       |       | ✓     |       |       |       |       |       |       |       |       |
@@ -214,9 +214,9 @@ Per [invariant 10](invariants.md#core-ledger-invariants), each event is delivere
 
 | Event                                         | CDM Qualification               | Ext | Move State / Notes                                            |
 |-----------------------------------------------|---------------------------------|-----|---------------------------------------------------------------|
-| EOD Settlement — VM Allocation (Tier 1)       | `DailySettlementEvent`          | †   | Internal cash move (Desk ↔ EFB); `Settled` immediately        |
-| EOD Settlement — VM External Payment (Tier 2) | `DailySettlementEvent`          | †   | External cash move (EFB ↔ CCP); `Expected → Instructed → Settled` |
-| NewTrade → RunningPosition Transition         | `DailySettlementEvent`          | †   | — (state event on futures unit; no new move)                  |
+| EOD Settlement — VM Allocation (Tier 1)       | `DailySettlementEvent`          | †   | Internal cash move (Internal Wallet ↔ EFB); `Settled` immediately |
+| EOD Settlement — VM External Payment (Tier 2) | `DailySettlementEvent`          | †   | External cash move (EFB ↔ CCP); `Pending(value-date) → Settled`   |
+| EOD Settlement — Cost-Basis Reset             | `DailySettlementEvent`          | †   | Position-state update: `costBasis ← S × multiplier × N`; marker → `EOD settled YYYY-MM-DD` |
 | Notional Reset / Revaluation                  | `Reset` / `MtMResetEvent`       | †   | `Pending → Settled` (if Δ ≠ 0); state event only (if Δ = 0)  |
 | SBL Collateral Margin Call / Return           | `MarkToMarketCollateralCall`    | †   | `Pending` (additional collateral due) / `Expected` (excess returned) |
 | IFR Rate Change                               | `IFRUpdateEvent`                | †   | — (state event on funding `TradeState`; no move created)      |
@@ -273,7 +273,7 @@ Per [invariant 10](invariants.md#core-ledger-invariants), each event is delivere
 | SBL Maturity / Loan Termination            | `ContractTermination`                        |     | Securities return `Pending`; collateral release `Expected`; final fee `Expected`/`Pending` |
 | Futures Expiry — Cash Settlement           | `ContractTermination`                        |     | Extinguishment `Pending`; final VM `Expected`                |
 | Futures Expiry — Physical Delivery         | `ContractTermination`                        |     | Per underlying contract (equities.md / bonds.md)             |
-| Futures Position Close                     | `Execution` (offsetting trade)               |     | `Settled` (futures unit); `NewTrade` state until EOD         |
+| Futures Position Close                     | `Execution` (offsetting trade)               |     | `Settled` (futures unit); updates `costBasis` and `N`        |
 | NDF Maturity / Unit Extinguishment         | `ContractTermination`                        |     | `Pending`; NDF state `Active → Matured → Terminated`         |
 | FX Early Termination (pre-settlement)      | —                                            |     | `Pending` / `Instructed → Failed`; no reversal               |
 | Bond — Early Redemption by Issuer (Call)   | `EarlyTerminationProvision`                  |     | Bond return `Instructed`; redemption cash `Expected`         |
