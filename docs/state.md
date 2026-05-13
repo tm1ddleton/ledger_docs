@@ -56,6 +56,26 @@ Beyond the Product, Unit state carries a **liveness** indicator that reflects wh
 
 For some contracts (e.g. cash equities, perpetual instruments) there is no contractual maturity: the Unit remains `Active` until a corporate action or delisting extinguishes it.
 
+### Corporate Action History
+
+For Units that may be the subject of corporate actions — equities are the canonical case, but rights, structured notes carrying bespoke amendments, and others apply — the Unit state carries an **append-only history of corporate actions applied to the Unit**. Each entry records the action type (per CDM `CorporateActionTypeEnum`; see [equities.md](smart_contracts/equities.md)), the effective date, the action terms (e.g. split ratio, dividend per share, election outcomes), and a reference to the ledger transaction(s) that implemented it.
+
+The corporate-action history lives at the Unit level rather than the Position level because **every corporate action is applied atomically to all instances of the Unit**: a 2-for-1 stock split affects every share of `AAPL` in every wallet simultaneously, on the same ex-date, with the same multiplier; a cash dividend pays out to every holder on the same record date. Recording the history once per Unit avoids duplicating it across every Position and makes it impossible for two holders to disagree on which actions have been applied.
+
+The corporate-action history is the basis for adjustments applied to derivative Units that reference the affected underlying — see [equity_options.md](smart_contracts/equity_options.md) for the option-level adjustment treatment.
+
+### Last Lifecycle Event
+
+The Unit state also records a reference to the **most recent lifecycle event** applied to the Unit — e.g. coupon payment on a bond, autocall observation on a structured note, corporate action on an equity, floating-rate fixing on an IRS.
+
+As with corporate actions, lifecycle events that act on the Unit (rather than on individual positions) are applied atomically across all instances. Tracking only the *last* event by reference is sufficient: the full history is recoverable from the ledger by walking back through the chain of lifecycle events on the Unit, each of which references its predecessor.
+
+Together with the corporate-action history (the complete set of events of one specific type) and the liveness state (the overall trajectory of the Unit), the last-lifecycle-event reference provides the most operationally useful summary of where the Unit currently sits in its lifecycle: *what just happened*.
+
+### Why These Elements Are Unit-Level, Not Position-Level
+
+The defining test for placing state at the Unit level rather than the Position level is **atomicity of application across all holders**: if an event affects every instance of the Unit simultaneously and identically, then the state it produces is global to the Unit, and there is no value in replicating it across every Position. Corporate actions, scheduled coupon payments, contractual fixings, and final settlement events all satisfy this test. Settlement bucket movements and cost-basis updates do not — they are intrinsically per-holder and therefore belong on the Position.
+
 ### Position
 
 A **Position** is the exposure of a single (wallet, unit, counterparty) triple. Where Unit state is global, Position state is per-holder.
@@ -168,6 +188,8 @@ The ledger is canonical; Unit, Product, and Position state are all derivable fro
 |------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Product                      | Set at Unit creation event; updated only through the cancel-and-correct amendment pattern.                                                                      |
 | Liveness                     | Set at Unit creation as `Active`; advanced by lifecycle events recorded as transactions on the ledger.                                                          |
+| Corporate-action history     | Appended each time a corporate action transaction is recorded against the Unit; entries reference the transaction(s) that implemented the action.               |
+| Last lifecycle event         | Pointer to the most recent lifecycle-event transaction recorded against the Unit; each event references its predecessor so the chain is recoverable.            |
 | Position bucket vector       | Aggregation of moves on the ledger by (wallet, unit, counterparty), partitioned by current move state and value date.                                           |
 | Position cost basis          | For VM products, Σ (price × quantity × multiplier) over the contributing trades. The EOD reset is recorded on the ledger as part of the daily settlement event. |
 
