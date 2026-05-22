@@ -117,10 +117,10 @@ The daily settlement cycle must simultaneously satisfy two requirements that ope
 
 The ledger satisfies both requirements through a **two-tier VM structure** created atomically within each `DailySettlementEvent`:
 
-| Tier | Move                    | Granularity                  | Initial State | Settlement Path           |
-|------|-------------------------|------------------------------|---------------|---------------------------|
-| 1    | Internal Wallet ↔ EFB | Per (internal wallet, contract)    | `Settled`     | Internal entry; immediate |
-| 2    | EFB ↔ CCP               | Single net per contract      | `Expected`    | External payment lifecycle |
+| Tier | Move                    | Granularity                  | Initial State                            | Settlement Path           |
+|------|-------------------------|------------------------------|------------------------------------------|---------------------------|
+| 1    | Internal Wallet ↔ EFB | Per (internal wallet, contract)    | `Settled`                                | Internal entry; immediate |
+| 2    | EFB ↔ CCP               | Single net per contract      | `Expected` (EFB receives) / `Pending` (EFB pays) | External payment lifecycle |
 
 The EFB is flat on VM: the sum of all Tier 1 allocation moves across all internal wallets equals the Tier 2 external move in the opposite direction, satisfying the double-entry invariant. The EFB's net cash position from VM is zero after both tiers complete.
 
@@ -176,15 +176,16 @@ For each `(internal wallet, contract, CCP)` position with current `costBasis` an
    | Move                            | From                 | To                   | Asset                      | Initial State |
    |---------------------------------|----------------------|----------------------|----------------------------|---------------|
    | VM settlement (EFB receives)    | CCP (virtual)        | Exchange-Facing Book | Cash (settlement currency) | `Expected`    |
-   | VM settlement (EFB pays)        | Exchange-Facing Book | CCP (virtual)        | Cash (settlement currency) | `Expected`    |
+   | VM settlement (EFB pays)        | Exchange-Facing Book | CCP (virtual)        | Cash (settlement currency) | `Pending`     |
 
    The Tier 2 amount equals the sum of all Tier 1 allocations across all internal wallets for the contract. One direction applies.
 
 3. Resets `costBasis ← S × multiplier × N` for each internal wallet's position.
 
-The Tier 2 external VM move follows the standard payment state flow:
+The Tier 2 external VM move follows the standard payment state flow for its direction (see [cash_payments.md](cash_payments.md)). The two directions start in different states because the entity controls the timing of its own outgoing instructions but not of incoming credits:
 ```
-Expected → Pending → Instructed → Settled
+EFB receives:  Expected → Instructed → Settled
+EFB pays:      Pending  → Instructed → Settled
 ```
 
 This single mechanic handles trade-date EOD, every subsequent business day, and any mix of new trades and running positions: the cost basis carries all the information needed.
@@ -217,7 +218,7 @@ The futures units are extinguished and the final VM move is created:
 |----------------------------|--------------------------|------------------------------|----------------------------|---------------|
 | Futures extinguishment     | Internal Wallet        | Exchange / CCP (virtual)     | N futures units            | `Pending`     |
 | Final VM (wallet receives) | Exchange / CCP (virtual) | Internal Wallet              | Cash (settlement currency) | `Expected`    |
-| Final VM (wallet pays)     | Internal Wallet          | Exchange / CCP (virtual)     | Cash (settlement currency) | `Expected`    |
+| Final VM (wallet pays)     | Internal Wallet          | Exchange / CCP (virtual)     | Cash (settlement currency) | `Pending`     |
 
 Unit state: `Active → Matured` when the final settlement transaction is created. `Matured → Expired` once all moves — extinguishment and final VM — have reached `Settled`.
 
@@ -257,7 +258,7 @@ QRL outputs are consumed at execution and stored as part of the trade record. Ch
 | Trade execution (long)                      | `EventQualificationEnum.Execution`           | `TransferStatusEnum.Settled`    | Futures unit move CCP → Internal Wallet; updates `costBasis` and `N`                   |
 | Trade execution (short)                     | `EventQualificationEnum.Execution`           | `TransferStatusEnum.Settled`    | Futures unit move Internal Wallet → CCP; updates `costBasis` and `N`                   |
 | EOD settlement — Tier 1 internal allocation | CDM extension: `DailySettlementEvent`        | `TransferStatusEnum.Settled`    | Internal VM move per internal wallet (Internal Wallet ↔ EFB); settles immediately; position-level P&L recorded; `costBasis` reset |
-| EOD settlement — Tier 2 external VM         | CDM extension: `DailySettlementEvent`        | `TransferStatusEnum.Expected`   | Net VM move at EFB level (EFB ↔ CCP); single amount per contract; equals sum of Tier 1 allocations |
+| EOD settlement — Tier 2 external VM         | CDM extension: `DailySettlementEvent`        | `Expected` / `Pending`          | Net VM move at EFB level (EFB ↔ CCP); single amount per contract; equals sum of Tier 1 allocations. `Expected` when EFB receives, `Pending` when EFB pays |
 | VM payment instructed                       | — (state transition only)                    | `TransferStatusEnum.Instructed` | Tier 2 external move only; standard payment lifecycle                                  |
 | VM payment confirmed                        | — (state transition only)                    | `TransferStatusEnum.Settled`    | Tier 2 external move settles                                                           |
 | Position close — offsetting trade           | `EventQualificationEnum.Execution`           | `TransferStatusEnum.Settled`    | Offsetting trade; processed by the same Trade Execution mechanic                       |
@@ -290,7 +291,7 @@ DailySettlementEvent:
     allocationMove        -- the Settled internal cash move (Internal Wallet ↔ EFB)
 
   -- Tier 2: external settlement (single move at EFB level)
-  externalVmMove          -- net of all internalAllocations[].vm; the Expected cash move (EFB ↔ CCP)
+  externalVmMove          -- net of all internalAllocations[].vm; the external cash move (EFB ↔ CCP), initial state Expected when EFB receives, Pending when EFB pays
 ```
 
 The `DailySettlementEvent` records the daily VM crystallisation, the cost-basis reset, and the two-tier cash structure. It is triggered by the exchange's publication of the official settlement price (or the EDSP on the expiry event).
