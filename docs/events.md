@@ -26,6 +26,36 @@ Per [invariant 10](invariants.md#core-ledger-invariants), each event is delivere
 
 ---
 
+## Projection and Down-Allocation
+
+Lifecycle events arise at two grains (see [Lifecycling Grain](state.md#lifecycling-grain)). **Trade-grained** events compose positions (execution, novation, allocation); **position-grained** events service positions (dividend, variation margin, corporate actions). A position-grained event is computed and recorded **once against the position** keyed by `(product version, internal wallet, counterparty wallet)`, then **projected** to the canonical CDM event type(s) at the boundary where they are needed.
+
+Projection runs in two directions:
+
+| Direction         | Purpose                                                                                                 | Worked example                                                                                              |
+|-------------------|---------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------|
+| **Down-allocation** | Explode one position-level event losslessly into per-trade (or per-internal-wallet) CDM events, for internal reconciliation and for CDM-native counterparty interop. | The two-tier VM structure (see below). |
+| **Up-composition**  | Aggregate trade-level events into the position they compose, so position-level events have a single grain to act on. | Multiple same-day futures fills composing one `(contract, wallet)` position before EOD settlement. |
+
+A down-allocation must be **lossless**: the per-trade projections sum back exactly to the position-level event (same asset, same net quantity, same value date). The position-level record is canonical; the per-trade CDM events are a derived projection re-derivable from it, consistent with [invariant 4 on derived state](state.md#state-versus-ledger).
+
+For a **`trade`-grained** product (OTC option, bilateral note) the position contains exactly one trade, so down-allocation is the identity map — the position-level event *is* the per-trade event and no projection machinery runs.
+
+### Worked example — two-tier variation margin
+
+The futures `DailySettlementEvent` is the canonical down-allocation. The CCP delivers a **single** net VM amount against the exchange-facing book's net position; the ledger projects it to a per-internal-wallet allocation:
+
+- **Tier 2 (the position/EFB-level event)**: one external VM move EFB ↔ CCP, equal to the net P&L across all internal wallets in the contract.
+- **Tier 1 (the down-allocation)**: one internal VM move per `(internal wallet, contract)`, sized to that wallet's P&L, summing exactly to the Tier 2 amount.
+
+See [futures.md](smart_contracts/futures.md#vm-granularity-and-settlement-netting) for the full mechanic, including why the two grains must be decoupled.
+
+### Worked example — per-counterparty dividend withholding
+
+A single cash dividend on one equity is a position-grained event, but it down-allocates to per-`(unit, wallet, counterparty wallet)` moves because withholding tax is resolved independently per recipient: the gross dividend is one figure, but each counterparty's net allocation uses its own resolved rate (see [equities.md](smart_contracts/equities.md#cash-dividend-dvca)). The per-position moves sum (gross) back to the single dividend declared on the underlying.
+
+---
+
 ## Contract Abbreviations
 
 | Abbr | Smart Contract                                                               |

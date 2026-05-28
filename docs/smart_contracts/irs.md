@@ -14,6 +14,17 @@ This contract covers three product variants:
 
 ---
 
+## Lifecycling Grain
+
+IRS products carry a [`lifecyclingGrain`](../state.md#lifecycling-grain) declared on the product registry entry, and the two cases differ in where the canonical lifecycle record sits:
+
+- **Bilateral (uncleared) IRS — `trade` grain.** The product version is unique per trade (bespoke economic terms), so `position == trade` by construction. The per-trade schedule of `Expected` moves described below *is* the canonical record; no down-allocation is required, and per-trade confirmation against the counterparty (MarkitWire / DTCC) maps directly onto it.
+- **Cleared IRS — `position` grain.** After novation many trades face the CCP under one clearing-member account and the CCP nets coupons and variation margin across them. The canonical lifecycle record is the position keyed by `(product version, desk book, CCP)`; the CCP's single net payment per currency per value date is the position-level event, and per-trade CDM events are produced by [down-allocation](../events.md#projection-and-down-allocation) at the interop boundary.
+
+The mechanics in the rest of this document are written for the `trade`-grained bilateral case for clarity. For the cleared case the same arithmetic applies at the position grain: a single net move per currency per value date rather than per-trade gross moves (see [Payment Netting](#payment-netting) and [Coupon Payment](#4-coupon-payment), which already describe the CCP net-instruction path).
+
+---
+
 ## Parties and Wallets
 
 ### Bilateral (Uncleared) Trade
