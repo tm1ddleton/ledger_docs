@@ -1,0 +1,1055 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CDM BusinessEvent — Anatomy & the Lifecycling Engine</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,800&family=IBM+Plex+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#0b0d12;
+    --ink-2:#11141c;
+    --panel:#141925;
+    --panel-2:#0f131c;
+    --line:#232a3a;
+    --line-2:#2e3850;
+    --text:#d7deec;
+    --text-dim:#8893a8;
+    --text-faint:#5d6678;
+    --gold:#e8b04b;
+    --gold-dim:#9a7c3c;
+
+    /* primitive operator palette (consistent across every diagram) */
+    --p-execution:#4ade80;
+    --p-quantity:#38bdf8;
+    --p-terms:#f59e0b;
+    --p-party:#a78bfa;
+    --p-exercise:#f472b6;
+    --p-contract:#2dd4bf;
+    --p-reset:#facc15;
+    --p-transfer:#fb7185;
+    --p-split:#94a3b8;
+    --p-obs:#cbd5e1;
+
+    --mono:'JetBrains Mono', ui-monospace, monospace;
+    --sans:'IBM Plex Sans', system-ui, sans-serif;
+    --display:'Fraunces', Georgia, serif;
+  }
+
+  *{box-sizing:border-box;}
+  html{scroll-behavior:smooth;}
+  body{
+    margin:0;
+    background:
+      radial-gradient(1200px 700px at 80% -10%, rgba(232,176,75,.06), transparent 60%),
+      linear-gradient(180deg, var(--ink) 0%, var(--ink-2) 100%);
+    color:var(--text);
+    font-family:var(--sans);
+    font-weight:400;
+    line-height:1.6;
+    letter-spacing:.005em;
+    -webkit-font-smoothing:antialiased;
+    background-attachment:fixed;
+  }
+  /* faint blueprint grid */
+  body::before{
+    content:"";
+    position:fixed; inset:0; z-index:0; pointer-events:none;
+    background-image:
+      linear-gradient(rgba(120,140,180,.035) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(120,140,180,.035) 1px, transparent 1px);
+    background-size:34px 34px;
+    mask-image:radial-gradient(circle at 50% 30%, #000 40%, transparent 90%);
+  }
+
+  .wrap{position:relative; z-index:1; max-width:1080px; margin:0 auto; padding:72px 28px 120px;}
+
+  /* ---------- header ---------- */
+  header{margin-bottom:64px;}
+  .kicker{
+    font-family:var(--mono); font-size:11px; letter-spacing:.32em; text-transform:uppercase;
+    color:var(--gold); margin-bottom:22px; display:flex; align-items:center; gap:12px;
+  }
+  .kicker::before{content:""; width:34px; height:1px; background:var(--gold-dim);}
+  h1{
+    font-family:var(--display); font-weight:600; font-size:clamp(38px,6vw,68px);
+    line-height:1.02; margin:0 0 22px; letter-spacing:-.02em; color:#f3f6fc;
+  }
+  h1 em{font-style:italic; color:var(--gold); font-weight:500;}
+  .lede{font-size:18px; color:var(--text-dim); max-width:64ch; font-weight:300;}
+  .lede b{color:var(--text); font-weight:500;}
+
+  /* ---------- section scaffolding ---------- */
+  section{margin-top:88px;}
+  .sec-head{display:flex; align-items:baseline; gap:18px; margin-bottom:8px;}
+  .sec-num{font-family:var(--mono); font-size:13px; color:var(--gold); flex:0 0 auto;}
+  h2{
+    font-family:var(--display); font-weight:500; font-size:clamp(26px,3.4vw,38px);
+    margin:0; letter-spacing:-.01em; color:#eef2f9;
+  }
+  .sec-sub{color:var(--text-dim); font-size:15.5px; max-width:70ch; margin:14px 0 34px; font-weight:300;}
+  .sec-sub code{font-family:var(--mono); font-size:.86em; color:var(--gold); background:rgba(232,176,75,.08); padding:1px 6px; border-radius:4px;}
+
+  /* ---------- generic panel ---------- */
+  .panel{
+    background:linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 100%);
+    border:1px solid var(--line); border-radius:14px; padding:30px;
+  }
+
+  /* ---------- anatomy nesting ---------- */
+  .nest{display:flex; flex-direction:column; gap:0;}
+  .layer{
+    border:1px solid var(--line-2); border-radius:12px; padding:16px 18px;
+    background:rgba(255,255,255,.015); position:relative;
+  }
+  .layer + .layer{margin-top:-2px;}
+  .layer .lname{font-family:var(--mono); font-size:12.5px; color:var(--text); letter-spacing:.02em;}
+  .layer .ldesc{font-size:13px; color:var(--text-faint); margin-top:3px;}
+  .layer.l0{border-left:3px solid #5566aa;}
+  .layer.l1{border-left:3px solid #6f7fc0; margin-left:22px;}
+  .layer.l2{border-left:3px solid #8b7bd0; margin-left:44px;}
+  .layer.l3{border-left:3px solid var(--p-party); margin-left:66px;}
+  .layer.l4{border-left:3px solid var(--gold); margin-left:88px;}
+  .layer .tag{font-family:var(--mono); font-size:10px; color:var(--text-faint); float:right; letter-spacing:.08em; text-transform:uppercase;}
+
+  /* ---------- primitive legend ---------- */
+  .legend{display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px 16px; margin-top:26px;}
+  .chip{display:flex; align-items:center; gap:9px; font-family:var(--mono); font-size:12.5px; color:var(--text-dim);}
+  .dot{width:11px; height:11px; border-radius:3px; flex:0 0 auto; box-shadow:0 0 10px -2px currentColor;}
+  .chip.aux{opacity:.85;}
+  .chip.aux .dot{border:1.5px dashed currentColor; background:transparent; box-shadow:none;}
+
+  /* ---------- code block ---------- */
+  pre{
+    font-family:var(--mono); font-size:12.5px; line-height:1.62; color:#c3ccdd;
+    background:#080a0f; border:1px solid var(--line); border-radius:10px;
+    padding:16px 18px; overflow-x:auto; margin:0; tab-size:2;
+  }
+  pre .kw{color:#7aa2f7;} pre .ty{color:#7dcfff;} pre .at{color:var(--gold);}
+  pre .cm{color:#566080; font-style:italic;} pre .st{color:#9ece6a;} pre .nm{color:#e0af68;}
+  .codecap{font-family:var(--mono); font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-faint); margin:0 0 9px;}
+
+  /* ---------- example card ---------- */
+  .ex{margin-top:30px;}
+  .ex-top{display:flex; flex-wrap:wrap; align-items:baseline; gap:14px; margin-bottom:6px;}
+  .ex-id{font-family:var(--mono); font-size:12px; color:var(--gold); border:1px solid var(--gold-dim); border-radius:30px; padding:3px 11px;}
+  .ex-name{font-family:var(--display); font-size:24px; font-weight:500; color:#eef2f9; letter-spacing:-.01em;}
+  .ex-econ{font-size:14px; color:var(--text-dim); font-weight:300; margin:0 0 22px; max-width:78ch;}
+  .ex-econ b{color:var(--text); font-weight:500;}
+
+  /* badges */
+  .badges{display:flex; flex-wrap:wrap; gap:10px; margin:22px 0 4px;}
+  .badge{font-family:var(--mono); font-size:11.5px; padding:5px 12px; border-radius:7px; border:1px solid var(--line-2); display:flex; gap:8px; align-items:center;}
+  .badge .bk{color:var(--text-faint); text-transform:uppercase; letter-spacing:.1em; font-size:9.5px;}
+  .badge .bv{color:var(--text);}
+  .badge.intent .bv{color:var(--p-quantity);}
+  .badge.qual .bv{color:var(--gold);}
+  .badge.qual{border-color:var(--gold-dim); background:rgba(232,176,75,.06);}
+
+  /* ---------- flow diagram ---------- */
+  .flow{
+    display:flex; align-items:stretch; gap:0; flex-wrap:nowrap; overflow-x:auto;
+    padding:6px 2px 14px; margin:4px 0 2px;
+  }
+  .stack{display:flex; flex-direction:column; gap:10px; justify-content:center;}
+  .node{
+    flex:0 0 auto; min-width:172px; max-width:210px;
+    border:1px solid var(--line-2); border-radius:11px; padding:13px 15px;
+    background:rgba(255,255,255,.022);
+  }
+  .node.after{border-color:var(--gold-dim); background:rgba(232,176,75,.05);}
+  .node.closed{border-color:#7a3b46; background:rgba(251,113,133,.05);}
+  .node .nlabel{font-family:var(--mono); font-size:9.5px; letter-spacing:.13em; text-transform:uppercase; color:var(--text-faint); margin-bottom:7px;}
+  .node .ntitle{font-size:13.5px; color:var(--text); font-weight:500; margin-bottom:6px;}
+  .node ul{margin:0; padding:0; list-style:none; display:flex; flex-direction:column; gap:4px;}
+  .node li{font-family:var(--mono); font-size:11px; color:var(--text-dim); display:flex; gap:6px;}
+  .node li::before{content:"·"; color:var(--text-faint);}
+  .node li.add{color:#a9e6c0;} .node li.add::before{content:"+"; color:var(--p-execution);}
+  .node li.zero{color:#f3a9b4;} .node li.zero::before{content:"→0"; color:var(--p-transfer); font-size:9px;}
+
+  .ops{display:flex; flex-direction:column; gap:8px; justify-content:center; padding:0 6px;}
+  .op{
+    flex:0 0 auto; min-width:150px;
+    border:1px solid; border-radius:9px; padding:9px 12px; background:rgba(255,255,255,.02);
+    position:relative;
+  }
+  .op .opk{font-family:var(--mono); font-size:9px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-faint);}
+  .op .opn{font-family:var(--mono); font-size:13px; font-weight:500; margin-top:2px;}
+  .op .opnote{font-size:11px; color:var(--text-dim); margin-top:4px; font-weight:300; line-height:1.4;}
+  .op.aux{border-style:dashed; background:transparent;}
+
+  .conn{flex:0 0 auto; display:flex; align-items:center; justify-content:center; width:46px; color:var(--text-faint); font-size:20px;}
+  .conn span{transform:translateY(-1px);}
+
+  /* op color variants */
+  .op.execution{border-color:var(--p-execution);} .op.execution .opn{color:var(--p-execution);}
+  .op.quantity{border-color:var(--p-quantity);} .op.quantity .opn{color:var(--p-quantity);}
+  .op.terms{border-color:var(--p-terms);} .op.terms .opn{color:var(--p-terms);}
+  .op.party{border-color:var(--p-party);} .op.party .opn{color:var(--p-party);}
+  .op.exercise{border-color:var(--p-exercise);} .op.exercise .opn{color:var(--p-exercise);}
+  .op.contract{border-color:var(--p-contract);} .op.contract .opn{color:var(--p-contract);}
+  .op.reset{border-color:var(--p-reset);} .op.reset .opn{color:var(--p-reset);}
+  .op.transfer{border-color:var(--p-transfer);} .op.transfer .opn{color:var(--p-transfer);}
+  .op.split{border-color:var(--p-split);} .op.split .opn{color:var(--p-split);}
+  .op.obs{border-color:var(--p-obs); color:var(--p-obs);} .op.obs .opn{color:var(--p-obs);}
+
+  .why{font-size:14px; color:var(--text-dim); font-weight:300; margin:18px 0 0; border-left:2px solid var(--line-2); padding-left:16px; line-height:1.65;}
+  .why b{color:var(--text); font-weight:500;}
+
+  .grid2{display:grid; grid-template-columns:1fr; gap:22px; margin-top:22px;}
+  @media(min-width:780px){.grid2{grid-template-columns:1fr 1fr;}}
+
+  /* punchline */
+  .punch{border:1px solid var(--gold-dim); background:linear-gradient(180deg, rgba(232,176,75,.07), rgba(232,176,75,.02)); border-radius:14px; padding:30px;}
+  .punch h3{font-family:var(--display); font-weight:500; font-size:22px; margin:0 0 8px; color:var(--gold);}
+  .punch p{color:var(--text-dim); font-weight:300; margin:0 0 22px; max-width:72ch;}
+  .compare{display:grid; grid-template-columns:1fr; gap:16px;}
+  @media(min-width:720px){.compare{grid-template-columns:1fr 1fr;}}
+  @media(min-width:820px){.compare.three{grid-template-columns:repeat(3,1fr);}}
+  .twodim{display:grid; grid-template-columns:1fr 1fr; gap:12px; margin:4px 0 22px;}
+  .dimbox{border:1px solid var(--line-2); border-radius:10px; padding:14px 16px; background:rgba(56,189,248,.04);}
+  .dimbox.b{background:rgba(245,158,11,.05);}
+  .dimbox .dk{font-family:var(--mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-faint);}
+  .dimbox .dv{font-family:var(--mono); font-size:14px; margin-top:5px;}
+  .dimbox.a .dv{color:var(--p-quantity);} .dimbox.b .dv{color:var(--p-terms);}
+  .dimbox .dn{font-size:12px; color:var(--text-dim); margin-top:5px; font-weight:300; line-height:1.45;}
+  .conv-cap{font-family:var(--mono); font-size:11px; letter-spacing:.06em; color:var(--text); margin:24px 0 12px; padding-bottom:8px; border-bottom:1px solid var(--line); display:flex; gap:10px; align-items:baseline;}
+  .conv-cap b{color:var(--gold); font-weight:500;}
+  .conv-cap span{color:var(--text-faint); font-size:10px; text-transform:uppercase; letter-spacing:.12em;}
+  .callout{border:1px solid var(--gold-dim); background:rgba(232,176,75,.06); border-radius:11px; padding:18px 20px; margin-top:24px;}
+  .callout .ck{font-family:var(--mono); font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--gold); margin-bottom:8px;}
+  .callout p{margin:0; font-size:13.5px; color:var(--text-dim); font-weight:300; line-height:1.65;}
+  .callout p b{color:var(--text); font-weight:500;}
+  .callout p + p{margin-top:10px;}
+  .cmp{border:1px solid var(--line-2); border-radius:11px; padding:18px; background:var(--panel-2);}
+  .cmp h4{font-family:var(--mono); font-size:12px; margin:0 0 12px; color:var(--text); letter-spacing:.02em; display:flex; align-items:center; gap:8px;}
+  .cmp h4 .pin{width:9px;height:9px;border-radius:2px;}
+  .cmp .ops{flex-direction:row; flex-wrap:wrap; padding:0;}
+  .cmp .verdict{font-size:13px; color:var(--text-dim); margin-top:14px; font-weight:300;}
+  .cmp .verdict b{color:var(--text); font-weight:500;}
+
+  footer{margin-top:96px; padding-top:26px; border-top:1px solid var(--line); color:var(--text-faint); font-size:12.5px; font-family:var(--mono); display:flex; flex-wrap:wrap; justify-content:space-between; gap:12px;}
+  footer a{color:var(--gold-dim); text-decoration:none;}
+
+  /* ---------- state machine ---------- */
+  .sm{display:flex; align-items:center; flex-wrap:wrap; gap:0; padding:8px 0 4px; overflow-x:auto;}
+  .st{flex:0 0 auto; border:1px solid var(--line-2); border-radius:10px; padding:11px 16px; background:rgba(255,255,255,.022); text-align:center; min-width:104px;}
+  .st .stn{font-family:var(--mono); font-size:13px; color:var(--text); font-weight:500;}
+  .st .sts{font-size:10.5px; color:var(--text-faint); margin-top:3px;}
+  .st.open{border-color:var(--p-quantity); background:rgba(56,189,248,.05);} .st.open .stn{color:var(--p-quantity);}
+  .st.settled{border-color:var(--p-execution); background:rgba(74,222,128,.05);} .st.settled .stn{color:var(--p-execution);}
+  .st.closed{border-color:var(--p-transfer); background:rgba(251,113,133,.05);} .st.closed .stn{color:var(--p-transfer);}
+  .st.cancelled{border-color:var(--p-split); background:rgba(148,163,184,.05);} .st.cancelled .stn{color:var(--p-split);}
+  .smarr{flex:0 0 auto; display:flex; flex-direction:column; align-items:center; color:var(--text-faint); padding:0 4px; min-width:54px;}
+  .smarr .lbl{font-family:var(--mono); font-size:9px; letter-spacing:.03em; color:var(--text-faint); margin-bottom:2px; text-align:center; line-height:1.3;}
+  .smarr .ln{font-size:16px; line-height:1;}
+  .smnote{font-size:12px; color:var(--text-faint); margin-top:14px; font-weight:300; line-height:1.6;}
+  .smnote b{color:var(--text-dim); font-weight:500;}
+
+  /* ---------- aggregation ---------- */
+  .agg{display:flex; align-items:stretch; gap:0; flex-wrap:nowrap; overflow-x:auto; padding:6px 2px 10px;}
+  .evcol{flex:0 0 auto; min-width:148px; display:flex; flex-direction:column; gap:7px; justify-content:center;}
+  .ev{border:1px solid var(--line-2); border-radius:8px; padding:8px 11px; background:rgba(255,255,255,.02); font-family:var(--mono); font-size:11px; color:var(--text-dim);}
+  .ev .evd{font-size:9.5px; color:var(--text-faint); margin-top:2px; font-family:var(--sans);}
+  .filterbox{flex:0 0 auto; min-width:194px; border:1px solid var(--gold-dim); border-radius:11px; padding:14px 16px; background:rgba(232,176,75,.05); align-self:center;}
+  .filterbox .fk{font-family:var(--mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--gold); margin-bottom:9px;}
+  .filterbox ul{margin:0; padding:0; list-style:none; display:flex; flex-direction:column; gap:5px;}
+  .filterbox li{font-family:var(--mono); font-size:11px; color:var(--text-dim); display:flex; gap:7px;}
+  .filterbox li::before{content:"·"; color:var(--gold-dim);}
+  .filterbox li b{color:var(--text); font-weight:500;}
+  .psnode{flex:0 0 auto; min-width:150px; border:1px solid var(--p-quantity); border-radius:11px; padding:13px 15px; background:rgba(56,189,248,.05); align-self:center;}
+  .psnode .pn{font-family:var(--mono); font-size:12.5px; color:var(--p-quantity); font-weight:500;}
+  .psnode ul{margin:7px 0 0; padding:0; list-style:none; display:flex; flex-direction:column; gap:4px;}
+  .psnode li{font-family:var(--mono); font-size:10.5px; color:var(--text-dim);}
+  .chainstrip{display:flex; align-items:center; gap:0; margin-top:18px; flex-wrap:wrap;}
+  .psnap{flex:0 0 auto; border:1px solid var(--line-2); border-radius:9px; padding:9px 13px; background:rgba(255,255,255,.022); text-align:center; min-width:96px;}
+  .psnap .pt{font-family:var(--mono); font-size:11px; color:var(--text); font-weight:500;}
+  .psnap .pd{font-size:9.5px; color:var(--text-faint); margin-top:2px;}
+  .psnap.genesis{border-style:dashed; opacity:.7;}
+  .lineagearr{flex:0 0 auto; display:flex; flex-direction:column; align-items:center; color:var(--text-faint); padding:0 6px; min-width:66px;}
+  .lineagearr .lt{font-family:var(--mono); font-size:9px; color:var(--p-party); margin-bottom:1px;}
+  .lineagearr .lb{font-size:9px; color:var(--text-faint); margin-top:1px;}
+
+  /* reveal animation */
+  .reveal{opacity:0; transform:translateY(16px); animation:rise .7s cubic-bezier(.2,.7,.2,1) forwards;}
+  @keyframes rise{to{opacity:1; transform:none;}}
+
+  @media(max-width:640px){
+    .layer.l1,.layer.l2,.layer.l3,.layer.l4{margin-left:14px;}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="reveal">
+    <div class="kicker">FINOS Common Domain Model · v6.0.0 · Event Model</div>
+    <h1>Anatomy of a <em>BusinessEvent</em>,<br>by worked decomposition</h1>
+    <p class="lede">In the CDM a lifecycle event has no declared type. A <b>BusinessEvent</b> is composed from a fixed set of <b>primitive operators</b> applied to a <b>before</b> trade state, producing one or more <b>after</b> states — and its identity is <b>inferred</b> from that composition. Below: the frame, then four events decomposed into primitives, intent, and inferred qualifier — then, in <b>06–08</b>, how the lifecycling engine builds on this: the registry and grain that key it, the projection and provenance that reconcile it, and the CDM profile that documents every divergence.</p>
+  </header>
+
+  <!-- ================= ANATOMY ================= -->
+  <section class="reveal" style="animation-delay:.08s">
+    <div class="sec-head"><span class="sec-num">00</span><h2>The frame</h2></div>
+    <p class="sec-sub">A <code>Workflow</code> wraps the event; the <code>BusinessEvent</code> carries an <code>eventDate</code>, an optional <code>intent</code>, and an inferred <code>eventQualifier</code>; each <code>Instruction</code> binds one composite <code>PrimitiveInstruction</code> to a <code>before</code> <code>TradeState</code>. The product stays immutable — only events that change the economics spawn a <i>new</i> product/trade instance.</p>
+
+    <div class="panel">
+      <div class="nest">
+        <div class="layer l0"><span class="tag">orchestration</span><div class="lname">Workflow › WorkflowStep</div><div class="ldesc">audit trail, timestamps, approvals, message routing — the steps that trigger the event</div></div>
+        <div class="layer l1"><span class="tag">root · qualifiable</span><div class="lname">BusinessEvent extends EventInstruction</div><div class="ldesc">eventDate · intent (optional) · eventQualifier (inferred) · after : TradeState (0..*)</div></div>
+        <div class="layer l2"><span class="tag">0..* — multi-trade</span><div class="lname">Instruction</div><div class="ldesc">one composite instruction applied to one before-state · before : TradeState [reference]</div></div>
+        <div class="layer l3"><span class="tag">composition</span><div class="lname">PrimitiveInstruction</div><div class="ldesc">one slot per primitive operator — populate the ones this event uses</div></div>
+        <div class="layer l4"><span class="tag">state</span><div class="lname">after : TradeState</div><div class="ldesc">trade · state (closedState / positionState) · resetHistory · transferHistory</div></div>
+      </div>
+
+      <div class="legend">
+        <div class="chip"><span class="dot" style="color:var(--p-execution);background:var(--p-execution)"></span>execution</div>
+        <div class="chip"><span class="dot" style="color:var(--p-quantity);background:var(--p-quantity)"></span>quantityChange</div>
+        <div class="chip"><span class="dot" style="color:var(--p-terms);background:var(--p-terms)"></span>termsChange</div>
+        <div class="chip"><span class="dot" style="color:var(--p-party);background:var(--p-party)"></span>partyChange</div>
+        <div class="chip"><span class="dot" style="color:var(--p-exercise);background:var(--p-exercise)"></span>exercise</div>
+        <div class="chip"><span class="dot" style="color:var(--p-contract);background:var(--p-contract)"></span>contractFormation</div>
+        <div class="chip"><span class="dot" style="color:var(--p-reset);background:var(--p-reset)"></span>reset</div>
+        <div class="chip"><span class="dot" style="color:var(--p-transfer);background:var(--p-transfer)"></span>transfer</div>
+        <div class="chip"><span class="dot" style="color:var(--p-split);background:var(--p-split)"></span>split</div>
+        <div class="chip aux"><span class="dot" style="color:var(--p-obs)"></span>Observation*</div>
+      </div>
+      <p style="font-size:12px;color:var(--text-faint);margin:14px 0 0;font-weight:300">* <b style="color:var(--text-dim);font-weight:500">Observation</b> is <i>not</i> one of the nine primitive operators — it is a root type recorded under <code style="font-family:var(--mono);color:var(--gold)">ObservationRecord</code> intent and referenced by a <span style="color:var(--p-reset)">reset</span>. Shown dashed where a market trigger drives the event.</p>
+
+      <div style="margin-top:26px">
+        <p class="codecap">Rune — the qualifiable root and its composition</p>
+        <pre><span class="kw">type</span> <span class="ty">BusinessEvent</span> <span class="kw">extends</span> <span class="ty">EventInstruction</span>:
+  eventQualifier <span class="ty">string</span> (0..1)   <span class="cm">// inferred via [qualification BusinessEvent]</span>
+  after <span class="ty">TradeState</span> (0..*)
+
+<span class="kw">type</span> <span class="ty">EventInstruction</span>:
+  intent <span class="ty">EventIntentEnum</span> (0..1)  <span class="cm">// tie-breaker when primitives are ambiguous</span>
+  eventDate <span class="ty">date</span> (0..1)
+  instruction <span class="ty">Instruction</span> (0..*)
+
+<span class="kw">type</span> <span class="ty">Instruction</span>:
+  primitiveInstruction <span class="ty">PrimitiveInstruction</span> (0..1)
+  before <span class="ty">TradeState</span> (0..1)        [metadata reference]
+
+<span class="kw">type</span> <span class="ty">PrimitiveInstruction</span>:
+  execution / quantityChange / termsChange / partyChange / exercise
+  contractFormation / reset / transfer / split   <span class="cm">// nine slots, each (0..1)</span>
+
+<span class="kw">type</span> <span class="ty">TradeState</span>:
+  trade <span class="ty">Trade</span> (1..1)
+  state <span class="ty">State</span> (0..1)             <span class="cm">// closedState · positionState</span>
+  resetHistory <span class="ty">Reset</span> (0..*)
+  transferHistory <span class="ty">TransferState</span> (0..*)</pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= EX 1 — INCEPTION ================= -->
+  <section class="reveal" style="animation-delay:.1s">
+    <div class="sec-head"><span class="sec-num">01</span><h2>Inception</h2></div>
+    <p class="sec-sub">A brand-new reverse convertible trade — the one event with <b>no before-state</b>. <code>execution</code> instantiates the trade from nothing, composed with <code>contractFormation</code> to bind the note's documentation in a single atomic step.</p>
+
+    <div class="ex panel">
+      <div class="ex-top"><span class="ex-id">RC · new trade</span><span class="ex-name">Instantiate the note from nothing</span></div>
+      <p class="ex-econ">Issuer/dealer and investor strike the RC. <span style="color:var(--p-execution)">execution</span> takes no before-state — the entire trade lives in the <code>ExecutionInstruction</code>. Folded with <span style="color:var(--p-contract)">contractFormation</span>, it produces a single live <code>TradeState</code> and binds the legal agreement at once. That after-state is the <code>before</code> every later event in this deck transitions.</p>
+
+      <div class="flow">
+        <div class="stack"><div class="node" style="border-style:dashed; opacity:.65"><div class="nlabel">before · TradeState</div><div class="ntitle" style="color:var(--text-faint)">ø — null</div><ul><li>nothing exists yet</li></ul></div></div>
+        <div class="conn"><span>→</span></div>
+        <div class="ops">
+          <div class="op execution"><div class="opk">primitive · no before</div><div class="opn">execution</div><div class="opnote">all terms in ExecutionInstruction · counterparty 2..2</div></div>
+          <div class="op contract"><div class="opk">primitive</div><div class="opn">contractFormation</div><div class="opnote">binds note documentation / master agreement</div></div>
+        </div>
+        <div class="conn"><span>→</span></div>
+        <div class="stack"><div class="node after"><div class="nlabel">after · TradeState</div><div class="ntitle">Live RC note</div><ul><li class="add">trade instantiated</li><li>resetHistory: ø</li><li>transferHistory: ø</li><li>state: open</li></ul></div></div>
+      </div>
+
+      <div class="badges">
+        <div class="badge intent"><span class="bk">intent</span><span class="bv">ContractFormation</span></div>
+        <div class="badge qual"><span class="bk">qualifier</span><span class="bv" style="color:var(--text-dim)">execution — product-qualified, not event-qualified</span></div>
+        <div class="badge"><span class="bk">lineage</span><span class="bv" style="color:var(--text-dim)">this after = the before of every later event</span></div>
+      </div>
+
+      <p class="codecap" style="margin-top:24px">Rune — the from-scratch instruction</p>
+      <pre><span class="kw">type</span> <span class="ty">ExecutionInstruction</span>:
+  product <span class="ty">NonTransferableProduct</span> (1..1)   <span class="cm">// the RC's economic terms</span>
+  priceQuantity <span class="ty">PriceQuantity</span> (1..*)      <span class="cm">// purchase price · notional</span>
+  counterparty <span class="ty">Counterparty</span> (2..2)        <span class="cm">// issuer/dealer ↔ investor</span>
+  executionDetails <span class="ty">ExecutionDetails</span> (1..1)
+  tradeDate <span class="ty">date</span> (1..1)
+  tradeIdentifier <span class="ty">TradeIdentifier</span> (1..*)
+
+<span class="kw">type</span> <span class="ty">ContractFormationInstruction</span>:
+  legalAgreement <span class="ty">LegalAgreement</span> (0..*)    <span class="cm">// note terms / confirmation</span>
+
+<span class="cm">// execution has NO before-state:  Create_Execution(instruction) -> TradeState</span></pre>
+
+      <div class="callout">
+        <div class="ck">the fork: what goes in the NonTransferableProduct</div>
+        <p><b>Note-as-security (settlement lens).</b> economicTerms = a single <b>SettlementPayout</b> buying the note for cash; underlier = the RC note as a <b>TransferableProduct</b> (a Security carrying the coupon-and-put payoff). Faithful to how it trades — but coupon &amp; redemption become asset-servicing, which the CDM deliberately does not model.</p>
+        <p><b>Note-as-contractual-product (economic-terms lens).</b> economicTerms directly compose the contingent coupon payout + the embedded short-put / settle-in-shares <b>OptionPayout</b> + principal. The trade <i>is</i> the structured product — the lens the later panels assume, since coupon and knockout act on these very terms.</p>
+        <p>Either way the <i>trade</i> is wrapped in a <b>NonTransferableProduct (1..1)</b> even though the note itself may be transferable: the bilateral terms still have to be agreed. The transferable / non-transferable boundary, in one object.</p>
+      </div>
+
+      <p class="why"><b>Why execution is the odd one out.</b> It is the only primitive with no before-state — it creates rather than transitions. So a fresh trade gets no lifecycle <span style="color:var(--gold)">eventQualifier</span> the way coupon/knockout/corporate-action do; the inference runs on the <b>product</b> (qualification functions tag the economic terms as a structured note with an embedded option), and <span style="color:var(--p-contract)">contractFormation</span> is what the event itself records.</p>
+    </div>
+  </section>
+
+  <!-- ================= EX 2 — COUPON ================= -->
+  <section class="reveal" style="animation-delay:.12s">
+    <div class="sec-head"><span class="sec-num">02</span><h2>Contingent coupon</h2></div>
+    <p class="sec-sub">A coupon payment on a <b style="color:var(--text)">reverse convertible</b> with a memory feature.</p>
+
+    <div class="ex panel">
+      <div class="ex-top">
+        <span class="ex-id">RC · memory coupon</span>
+        <span class="ex-name">Equity-linked coupon, observed then paid</span>
+      </div>
+      <p class="ex-econ">A note pays a periodic coupon <b>only if</b> the underlying equity fixes at or above the coupon barrier on the observation date; missed coupons accumulate and are released on the next in-barrier date (the <b>memory</b>). The coupon amount is <b>fixed</b> — the equity fixing only <i>gates</i> it. So the equity level is recorded as an <b>Observation</b>, the barrier/memory logic lives in the <b>economic terms</b>, and the result is a single <span style="color:var(--p-transfer)">transfer</span>. No <span style="color:var(--p-reset)">reset</span>: nothing in the cashflow consumes the observed value. The product is never touched.</p>
+
+      <div class="flow">
+        <div class="stack">
+          <div class="node">
+            <div class="nlabel">before · TradeState</div>
+            <div class="ntitle">Live RC note</div>
+            <ul><li>product immutable</li><li>resetHistory: n</li><li>transferHistory: m</li></ul>
+          </div>
+        </div>
+        <div class="conn"><span>→</span></div>
+        <div class="ops">
+          <div class="op obs aux"><div class="opk">root type · intent ObservationRecord</div><div class="opn">Observation</div><div class="opnote">equity fixing vs coupon barrier — a gate, not a value</div></div>
+          <div class="op transfer"><div class="opk">primitive</div><div class="opn">transfer</div><div class="opnote">fixed coupon + memorised misses, issuer → holder (skipped if out-of-barrier)</div></div>
+        </div>
+        <div class="conn"><span>→</span></div>
+        <div class="stack">
+          <div class="node after">
+            <div class="nlabel">after · TradeState</div>
+            <div class="ntitle">Same note, advanced</div>
+            <ul><li>product unchanged</li><li>resetHistory: n <span style="color:var(--text-faint)">(untouched)</span></li><li class="add">transferHistory: m+1</li></ul>
+          </div>
+        </div>
+      </div>
+
+      <div class="badges">
+        <div class="badge intent"><span class="bk">intent</span><span class="bv">CashFlow</span></div>
+        <div class="badge qual"><span class="bk">inferred qualifier</span><span class="bv">cashflow / coupon payment</span></div>
+        <div class="badge"><span class="bk">closes?</span><span class="bv" style="color:var(--text-dim)">no — note stays live</span></div>
+      </div>
+
+      <p class="codecap" style="margin-top:24px">Rune — the observed input and the cashflow output</p>
+      <pre><span class="kw">type</span> <span class="ty">Observation</span>:               <span class="cm">// root type — recorded, not a primitive</span>
+  observedValue <span class="ty">Price</span> (1..1)    <span class="cm">// the equity fixing (the value)</span>
+  observationIdentifier <span class="ty">ObservationIdentifier</span> (1..1)
+
+<span class="kw">type</span> <span class="ty">ObservationIdentifier</span>:    <span class="cm">// what / when / where / how — not just the asset</span>
+  observable <span class="ty">Observable</span> (1..1)              <span class="cm">// the equity (Asset | Basket | Index)</span>
+  observationDate <span class="ty">date</span> (1..1)
+  observationTime <span class="ty">TimeZone</span> (0..1)
+  informationSource <span class="ty">InformationSource</span> (0..1)      <span class="cm">// the official source / page</span>
+  determinationMethodology <span class="ty">DeterminationMethodology</span> (0..1)  <span class="cm">// e.g. closing px</span>
+
+<span class="kw">type</span> <span class="ty">TransferInstruction</span>:
+  transferState <span class="ty">TransferState</span> (0..*)   <span class="cm">// the fixed coupon cashflow</span>
+
+<span class="cm">// the barrier test + memory accrual are NOT a primitive —</span>
+<span class="cm">// they live in the contingent OptionPayout / economicTerms,</span>
+<span class="cm">// evaluated against the Observation to decide whether to pay.</span></pre>
+
+      <p class="codecap" style="margin-top:18px">JSON — PrimitiveInstruction (illustrative)</p>
+      <pre>{ <span class="cm">// no "reset" — the coupon amount is fixed, not resolved</span>
+  <span class="at">"transfer"</span>: {
+    <span class="at">"transferState"</span>: [{ <span class="at">"transfer"</span>: {
+        <span class="at">"payerReceiver"</span>: { <span class="at">"payer"</span>: <span class="st">"Issuer"</span>, <span class="at">"receiver"</span>: <span class="st">"Holder"</span> },
+        <span class="at">"quantity"</span>: { <span class="at">"value"</span>: <span class="nm">9.50</span>, <span class="at">"unit"</span>: { <span class="at">"currency"</span>: <span class="st">"USD"</span> } },
+        <span class="at">"settlementOrigin"</span>: { <span class="at">"reference"</span>: <span class="st">"couponLeg-1"</span> }  <span class="cm">// the payout, not a reset</span>
+  }}]}}</pre>
+
+      <div class="callout">
+        <div class="ck">the test: consumed vs tested</div>
+        <p><b>reset</b> earns its place only when the observed value is <b>consumed as a value</b> in the cashflow formula — a floating leg fixing SOFR, an equity-swap performance leg locking the period price. The payout literally cannot compute the transfer until that variable price slot is filled.</p>
+        <p>Here the equity level is <b>tested as a condition</b> (above/below the barrier) and the coupon is fixed, so there is no variable price attribute for <code style="font-family:var(--mono);color:var(--gold);font-size:.85em">Reset.resetValue</code> (a mandatory <code style="font-family:var(--mono);color:var(--gold);font-size:.85em">Price</code>) to bind to — a reset would be a dangling record. The conditionality belongs in the <b>economic terms</b>; the observation is just recorded.</p>
+      </div>
+
+      <p class="why"><b>Same equity, opposite role.</b> An equity <i>swap</i> on this very name <b>would</b> use <span style="color:var(--p-reset)">reset</span> — there the observed price drives the return and is consumed by the performance leg. The reverse convertible observes the same price but only to open or shut a gate, which is why <span style="color:var(--p-reset)">reset</span> adds nothing and the event reduces to <span style="color:var(--p-obs)">Observation</span> → <span style="color:var(--p-transfer)">transfer</span>.</p>
+    </div>
+  </section>
+
+  <!-- ================= EX 2 — KNOCKOUT ================= -->
+  <section class="reveal" style="animation-delay:.16s">
+    <div class="sec-head"><span class="sec-num">03</span><h2>Knockout + rebate</h2></div>
+    <p class="sec-sub">A barrier breach that <b style="color:var(--text)">extinguishes</b> the option and pays a consolation rebate.</p>
+
+    <div class="ex panel">
+      <div class="ex-top">
+        <span class="ex-id">barrier · KO</span>
+        <span class="ex-name">Terminate on breach, settle the rebate</span>
+      </div>
+      <p class="ex-econ">The underlier touches the knockout barrier — captured as an <b>Observation</b> — and the option ceases. That is a <span style="color:var(--p-quantity)">quantityChange</span> driving notional to zero with <code>closedState = Terminated</code>, plus a <span style="color:var(--p-transfer)">transfer</span> of the fixed rebate. There is no <code>KnockedOut</code> state in the model, so the barrier nature lives in the product terms, not the event.</p>
+
+      <div class="flow">
+        <div class="stack">
+          <div class="node">
+            <div class="nlabel">before · TradeState</div>
+            <div class="ntitle">Live KO option</div>
+            <ul><li>notional > 0</li><li>state: open</li></ul>
+          </div>
+        </div>
+        <div class="conn"><span>→</span></div>
+        <div class="ops">
+          <div class="op obs aux"><div class="opk">root type · ObservationRecord</div><div class="opn">Observation</div><div class="opnote">barrier touched — the trigger</div></div>
+          <div class="op quantity"><div class="opk">primitive</div><div class="opn">quantityChange</div><div class="opnote">REPLACE → 0 · sets closedState = Terminated</div></div>
+          <div class="op transfer"><div class="opk">primitive</div><div class="opn">transfer</div><div class="opnote">fixed rebate, writer → holder</div></div>
+        </div>
+        <div class="conn"><span>→</span></div>
+        <div class="stack">
+          <div class="node closed">
+            <div class="nlabel">after · TradeState</div>
+            <div class="ntitle">Closed option</div>
+            <ul><li class="zero">notional 0</li><li>closedState: Terminated</li><li class="add">transferHistory: rebate</li></ul>
+          </div>
+        </div>
+      </div>
+
+      <div class="badges">
+        <div class="badge intent"><span class="bk">intent</span><span class="bv" style="color:var(--text-faint)">absent — required for the qualifier</span></div>
+        <div class="badge qual"><span class="bk">inferred qualifier</span><span class="bv">Termination</span></div>
+      </div>
+
+      <p class="codecap" style="margin-top:24px">Rune — the qualification gate</p>
+      <pre><span class="kw">func</span> <span class="ty">Qualify_Termination</span>:
+  [qualification BusinessEvent]
+  <span class="cm">// intent absent  AND  (quantityChange only) OR (quantityChange, transfer only)</span>
+  <span class="cm">// AND  QuantityDecreasedToZero(before, after) = True</span>
+  <span class="cm">// AND  after -> state -> closedState = ClosedStateEnum -> Terminated</span>
+
+<span class="kw">enum</span> <span class="ty">ClosedStateEnum</span>:
+  Allocated  Cancelled  Exercised  Expired  Matured  Novated  <span class="at">Terminated</span>
+  <span class="cm">// note: no KnockedOut — barrier identity stays in the product</span></pre>
+
+      <p class="codecap" style="margin-top:18px">JSON — composite PrimitiveInstruction (illustrative)</p>
+      <pre>{ <span class="at">"quantityChange"</span>: {
+    <span class="at">"change"</span>: [{ <span class="at">"quantity"</span>: [{ <span class="at">"value"</span>: { <span class="at">"amount"</span>: <span class="nm">0</span> } }] }],
+    <span class="at">"direction"</span>: <span class="st">"REPLACE"</span>
+  },
+  <span class="at">"transfer"</span>: {
+    <span class="at">"transferState"</span>: [{ <span class="at">"transfer"</span>: {
+        <span class="at">"payerReceiver"</span>: { <span class="at">"payer"</span>: <span class="st">"Writer"</span>, <span class="at">"receiver"</span>: <span class="st">"Holder"</span> },
+        <span class="at">"quantity"</span>: { <span class="at">"value"</span>: <span class="nm">2500</span>, <span class="at">"unit"</span>: { <span class="at">"currency"</span>: <span class="st">"USD"</span> } }
+  }}]}}</pre>
+
+      <p class="why"><b>The subtlety.</b> Attaching an <code>intent</code> to flag the barrier would <i>break</i> <span style="color:var(--p-terms)">Qualify_Termination</span>, which insists intent is absent. So record the breach as an <span style="color:var(--p-obs)">Observation</span> step and let the termination qualify cleanly. Contrast a knock-<i>in</i>: it terminates nothing, so it never reaches quantity-to-zero — it is essentially just the Observation, with exercisability emergent from the product's barrier terms.</p>
+    </div>
+  </section>
+
+  <!-- ================= EX 3 & 4 — SPLITS ================= -->
+  <section class="reveal" style="animation-delay:.2s">
+    <div class="sec-head"><span class="sec-num">04</span><h2>One corporate action, three instruments</h2></div>
+    <p class="sec-sub">A 2-for-1 stock split applied to the <b style="color:var(--text)">cash equity</b>, to a <b style="color:var(--text)">vanilla OTC option</b>, and to a <b style="color:var(--text)">listed option</b> on the same equity. Same trigger, same <code>intent</code> — but the primitive footprint diverges, and on the listed contract the <code>quantityChange</code> stops being unambiguous.</p>
+
+    <div class="grid2">
+      <!-- equity -->
+      <div class="ex panel" style="margin-top:0">
+        <div class="ex-top"><span class="ex-id">CA · equity</span><span class="ex-name" style="font-size:21px">Split on the equity</span></div>
+        <p class="ex-econ" style="margin-bottom:18px">The position is simply <b>rescaled</b>: twice the shares at half the price. The asset's identity and the trade's economics are unchanged, so a single <span style="color:var(--p-quantity)">quantityChange</span> carries it.</p>
+
+        <div class="flow">
+          <div class="stack"><div class="node"><div class="nlabel">before</div><div class="ntitle">Equity holding</div><ul><li>100 sh</li><li>@ $50.00</li></ul></div></div>
+          <div class="conn"><span>→</span></div>
+          <div class="ops"><div class="op quantity"><div class="opk">primitive</div><div class="opn">quantityChange</div><div class="opnote">qty ×2 · price ÷2 · REPLACE</div></div></div>
+          <div class="conn"><span>→</span></div>
+          <div class="stack"><div class="node after"><div class="nlabel">after</div><div class="ntitle">Same product</div><ul><li class="add">200 sh</li><li>@ $25.00</li></ul></div></div>
+        </div>
+
+        <div class="badges">
+          <div class="badge intent"><span class="bk">intent</span><span class="bv">CorporateActionAdjustment</span></div>
+          <div class="badge qual"><span class="bk">product</span><span class="bv" style="color:var(--p-quantity)">unchanged — rescaled</span></div>
+        </div>
+
+        <p class="codecap" style="margin-top:22px">JSON — single primitive</p>
+        <pre>{ <span class="at">"quantityChange"</span>: {
+    <span class="at">"change"</span>: [{ <span class="at">"quantity"</span>: [{ <span class="at">"value"</span>: { <span class="at">"amount"</span>: <span class="nm">200</span>,
+        <span class="at">"unit"</span>: { <span class="at">"financialUnit"</span>: <span class="st">"SHARE"</span> } }],
+      <span class="at">"price"</span>: [{ <span class="at">"value"</span>: <span class="nm">25.00</span>, <span class="at">"unit"</span>: { <span class="at">"currency"</span>: <span class="st">"USD"</span> } }] }],
+    <span class="at">"direction"</span>: <span class="st">"REPLACE"</span>
+  }}</pre>
+      </div>
+
+      <!-- OTC option -->
+      <div class="ex panel" style="margin-top:0">
+        <div class="ex-top"><span class="ex-id">CA · OTC option</span><span class="ex-name" style="font-size:21px">Split on an OTC option</span></div>
+        <p class="ex-econ" style="margin-bottom:18px">One quantity dimension only — the number of underlying shares, in <code style="font-family:var(--mono);color:var(--gold);font-size:.85em">quantity.value</code>. The split adjusts the strike, which is in the <b>economic terms</b>, so it spawns a <b>new product instance</b>: a <span style="color:var(--p-terms)">termsChange</span> plus an unambiguous <span style="color:var(--p-quantity)">quantityChange</span> on the share count.</p>
+
+        <div class="flow">
+          <div class="stack"><div class="node"><div class="nlabel">before</div><div class="ntitle">Call option</div><ul><li>strike $50</li><li>100 shares</li></ul></div></div>
+          <div class="conn"><span>→</span></div>
+          <div class="ops">
+            <div class="op terms"><div class="opk">primitive</div><div class="opn">termsChange</div><div class="opnote">strike $50 → $25 · new product instance</div></div>
+            <div class="op quantity"><div class="opk">primitive · quantity.value</div><div class="opn">quantityChange</div><div class="opnote">number of shares ×2 → 200</div></div>
+          </div>
+          <div class="conn"><span>→</span></div>
+          <div class="stack"><div class="node after"><div class="nlabel">after</div><div class="ntitle">New product</div><ul><li class="add">strike $25</li><li class="add">200 shares</li></ul></div></div>
+        </div>
+
+        <div class="badges">
+          <div class="badge intent"><span class="bk">intent</span><span class="bv">CorporateActionAdjustment</span></div>
+          <div class="badge qual"><span class="bk">product</span><span class="bv" style="color:var(--p-terms)">redefined — new instance</span></div>
+        </div>
+
+        <p class="codecap" style="margin-top:22px">JSON — composite primitive</p>
+        <pre>{ <span class="at">"termsChange"</span>: {
+    <span class="at">"product"</span>: { <span class="cm">/* new economicTerms: optionPayout</span>
+                 <span class="cm">strike.value = 25.00 */</span> }
+  },
+  <span class="at">"quantityChange"</span>: {  <span class="cm">// targets quantity.value</span>
+    <span class="at">"change"</span>: [{ <span class="at">"quantity"</span>: [{ <span class="at">"value"</span>: { <span class="at">"amount"</span>: <span class="nm">200</span>,
+        <span class="at">"unit"</span>: { <span class="at">"financialUnit"</span>: <span class="st">"SHARE"</span> } }] }],
+    <span class="at">"direction"</span>: <span class="st">"REPLACE"</span>
+  }}</pre>
+      </div>
+    </div>
+
+    <!-- listed option (full width) -->
+    <div class="ex panel" style="margin-top:22px">
+      <div class="ex-top"><span class="ex-id">CA · listed option</span><span class="ex-name" style="font-size:21px">Split on a listed option</span></div>
+      <p class="ex-econ">A listed contract carries <b>two</b> quantity dimensions, and the CDM parks both inside the same quantity object. The strike is still a <span style="color:var(--p-terms)">termsChange</span>, but the split also moves <i>one</i> of these two — and the bare <span style="color:var(--p-quantity)">quantityChange</span> no longer tells you which. The choice is set by the adjustment convention.</p>
+
+      <div class="twodim">
+        <div class="dimbox a"><div class="dk">quantity.value</div><div class="dv">number of contracts</div><div class="dn">the position you hold — e.g. 10 contracts</div></div>
+        <div class="dimbox b"><div class="dk">quantity.multiplier</div><div class="dv">contract size / deliverable</div><div class="dn">shares per contract — e.g. 100 sh (cf. the WTI 1,000 BBL multiplier)</div></div>
+      </div>
+
+      <div class="conv-cap"><b>Convention A</b> — whole-number split (2:1), adjust contracts <span>OCC standard</span></div>
+      <div class="flow">
+        <div class="stack"><div class="node"><div class="nlabel">before</div><div class="ntitle">Listed call</div><ul><li>10 contracts</li><li>×100 sh</li><li>strike $50</li></ul></div></div>
+        <div class="conn"><span>→</span></div>
+        <div class="ops">
+          <div class="op terms"><div class="opk">primitive</div><div class="opn">termsChange</div><div class="opnote">strike $50 → $25</div></div>
+          <div class="op quantity"><div class="opk">primitive · quantity.value</div><div class="opn">quantityChange</div><div class="opnote">contracts ×2 → 20 · deliverable unchanged</div></div>
+        </div>
+        <div class="conn"><span>→</span></div>
+        <div class="stack"><div class="node after"><div class="nlabel">after</div><div class="ntitle">New product</div><ul><li class="add">20 contracts</li><li>×100 sh</li><li class="add">strike $25</li></ul></div></div>
+      </div>
+
+      <div class="conv-cap"><b>Convention B</b> — odd-ratio split (3:2), adjust deliverable <span>non-whole ratio</span></div>
+      <div class="flow">
+        <div class="stack"><div class="node"><div class="nlabel">before</div><div class="ntitle">Listed call</div><ul><li>10 contracts</li><li>×100 sh</li><li>strike $50.00</li></ul></div></div>
+        <div class="conn"><span>→</span></div>
+        <div class="ops">
+          <div class="op terms"><div class="opk">primitive</div><div class="opn">termsChange</div><div class="opnote">strike ×⅔ → $33.33</div></div>
+          <div class="op terms" style="border-style:dashed"><div class="opk">quantity.multiplier · terms-level?</div><div class="opn" style="color:var(--p-quantity)">quantityChange</div><div class="opnote">deliverable ×1.5 → 150 sh · contracts unchanged</div></div>
+        </div>
+        <div class="conn"><span>→</span></div>
+        <div class="stack"><div class="node after"><div class="nlabel">after</div><div class="ntitle">New product</div><ul><li>10 contracts</li><li class="add">×150 sh</li><li class="add">strike $33.33</li></ul></div></div>
+      </div>
+
+      <div class="badges">
+        <div class="badge intent"><span class="bk">intent</span><span class="bv">CorporateActionAdjustment</span></div>
+        <div class="badge qual"><span class="bk">product</span><span class="bv" style="color:var(--p-terms)">redefined — new instance</span></div>
+      </div>
+
+      <div class="callout">
+        <div class="ck">the ambiguity you have to resolve</div>
+        <p><b>1 · Which sub-attribute?</b> A listed <code style="font-family:var(--mono);color:var(--gold);font-size:.85em">quantityChange</code> must be qualified as targeting <span style="color:var(--p-quantity)">quantity.value</span> (contracts, Convention A) or <span style="color:var(--p-terms)">quantity.multiplier</span> (deliverable, Convention B). The primitive name alone is underspecified — both dimensions live inside the same quantity object.</p>
+        <p><b>2 · Is the deliverable even a quantity change?</b> The multiplier sits structurally in the quantity schedule, so <code style="font-family:var(--mono);color:var(--gold);font-size:.85em">quantityChange</code> can reach it — but economically the deliverable is a <i>contract-specification</i> property, like the strike. A defensible alternative is to model the Convention-B deliverable adjustment as part of the <span style="color:var(--p-terms)">termsChange</span> and keep "quantity" meaning <i>position</i>. The CDM does not crisply adjudicate this (hence the dashed box above).</p>
+      </div>
+    </div>
+
+    <!-- punchline -->
+    <div class="punch reveal" style="margin-top:30px; animation-delay:.24s">
+      <h3>The punchline</h3>
+      <p>Same 2-for-1 split, same <code style="font-family:var(--mono);color:var(--gold)">CorporateActionAdjustment</code> intent throughout. The footprint diverges by <i>where</i> the adjustment lands — position quantity vs economic terms — and on the listed contract a single primitive splits into two possible targets.</p>
+      <div class="compare three">
+        <div class="cmp">
+          <h4><span class="pin" style="background:var(--p-quantity)"></span>Cash equity</h4>
+          <div class="ops"><div class="op quantity" style="min-width:auto"><div class="opn">quantityChange</div></div></div>
+          <p class="verdict">Pure <b>rescale</b> — quantity & price only. Product untouched; one primitive.</p>
+        </div>
+        <div class="cmp">
+          <h4><span class="pin" style="background:var(--p-terms)"></span>OTC option</h4>
+          <div class="ops"><div class="op terms" style="min-width:auto"><div class="opn">termsChange</div></div><div class="op quantity" style="min-width:auto"><div class="opn">quantityChange</div></div></div>
+          <p class="verdict">Strike is economic terms → <b>new product instance</b>; quantity is unambiguous (shares).</p>
+        </div>
+        <div class="cmp">
+          <h4><span class="pin" style="background:var(--gold)"></span>Listed option</h4>
+          <div class="ops"><div class="op terms" style="min-width:auto"><div class="opn">termsChange</div></div><div class="op quantity" style="min-width:auto"><div class="opn">quantityChange</div></div></div>
+          <p class="verdict">Same shape, but <b>quantityChange must be qualified</b>: <span style="color:var(--p-quantity)">value</span> (contracts) or <span style="color:var(--p-terms)">multiplier</span> (deliverable)?</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 05 — STATE & AGGREGATION ================= -->
+  <section class="reveal" style="animation-delay:.12s">
+    <div class="sec-head"><span class="sec-num">05</span><h2>State, settlement &amp; aggregation</h2></div>
+    <p class="sec-sub">Every event so far has written to a <code>TradeState</code>. Two questions follow: what does the <code>state</code> on a single trade look like, and how do many trades roll up into a position? Both are <b style="color:var(--text)">computed</b>, never declared — the position is the accumulated effect of replaying events.</p>
+
+    <!-- positionState machine -->
+    <div class="ex panel">
+      <div class="ex-top"><span class="ex-id">State · positionState</span><span class="ex-name" style="font-size:22px">The risk-lifecycle of one trade</span></div>
+      <p class="ex-econ"><code style="font-family:var(--mono);color:var(--gold);font-size:.85em">State</code> holds two attributes: <span style="color:var(--p-quantity)">positionState</span> (the risk view — <code style="font-family:var(--mono);color:var(--gold);font-size:.85em">PositionStatusEnum</code>) and <span style="color:var(--p-transfer)">closedState</span> (the reason it closed). A trade is <b>open</b> only when <i>both</i> are unset — which is why the inception panel showed an empty state. The primitives write these; you never set them by hand.</p>
+
+      <div class="sm">
+        <div class="st"><div class="stn" style="color:var(--text-faint)">ø</div><div class="sts">open · both unset</div></div>
+        <div class="smarr"><span class="lbl">execution</span><span class="ln">→</span></div>
+        <div class="st open"><div class="stn">Executed</div><div class="sts">risk transferred</div></div>
+        <div class="smarr"><span class="lbl">contractFormation</span><span class="ln">→</span></div>
+        <div class="st open"><div class="stn">Formed</div><div class="sts">contractual product</div></div>
+        <div class="smarr"><span class="lbl">settlement</span><span class="ln">→</span></div>
+        <div class="st settled"><div class="stn">Settled</div><div class="sts">e.g. securities</div></div>
+        <div class="smarr"><span class="lbl">termination</span><span class="ln">→</span></div>
+        <div class="st closed"><div class="stn">Closed</div><div class="sts">+ closedState reason</div></div>
+      </div>
+      <div class="sm" style="margin-top:6px">
+        <div class="smarr" style="min-width:104px"><span class="lbl">cancellation<br>after execution</span></div>
+        <div class="smarr"><span class="ln">↘</span></div>
+        <div class="st cancelled"><div class="stn">Cancelled</div><div class="sts">execution undone</div></div>
+      </div>
+
+      <div class="badges">
+        <div class="badge"><span class="bk">open test</span><span class="bv" style="color:var(--p-quantity)">closedState ø AND positionState ø</span></div>
+        <div class="badge qual"><span class="bk">invariant</span><span class="bv">positionState = Closed ⟹ closedState exists</span></div>
+      </div>
+
+      <p class="codecap" style="margin-top:22px">Rune — the two state dimensions and the cross-field rule</p>
+      <pre><span class="kw">type</span> <span class="ty">State</span>:
+  closedState <span class="ty">ClosedState</span> (0..1)        <span class="cm">// the reason: Terminated, Matured, Exercised…</span>
+  positionState <span class="ty">PositionStatusEnum</span> (0..1)  <span class="cm">// the risk-lifecycle marker</span>
+
+  <span class="kw">condition</span> ClosedStateExists:
+    <span class="kw">if</span> positionState = PositionStatusEnum -> Closed
+    <span class="kw">then</span> closedState exists
+
+<span class="kw">enum</span> <span class="ty">PositionStatusEnum</span>:
+  <span class="at">Executed</span>   <span class="cm">// risk transferred — the point of execution</span>
+  <span class="at">Formed</span>     <span class="cm">// contract formed (contractual product)</span>
+  <span class="at">Settled</span>    <span class="cm">// settled after execution, e.g. securities</span>
+  <span class="at">Cancelled</span>  <span class="cm">// cancellation following an execution</span>
+  <span class="at">Closed</span>     <span class="cm">// closed via a termination event</span></pre>
+
+      <p class="why"><b>Two attributes, not one.</b> <span style="color:var(--p-quantity)">positionState</span> is the coarse "where in life" marker; <span style="color:var(--p-transfer)">closedState</span> carries <i>why</i> it ended. The knockout panel set <code style="font-family:var(--mono);color:var(--gold);font-size:.85em">closedState = Terminated</code>; the invariant above is what forces that reason to be present whenever <span style="color:var(--p-transfer)">positionState</span> reaches Closed.</p>
+    </div>
+
+    <!-- aggregation -->
+    <div class="ex panel" style="margin-top:22px">
+      <div class="ex-top"><span class="ex-id">Portfolio · aggregation</span><span class="ex-name" style="font-size:22px">Many trades → a position, by replay</span></div>
+      <p class="ex-econ">A position is not a stored balance you increment. A <code style="font-family:var(--mono);color:var(--gold);font-size:.85em">Portfolio</code> is defined by its <b>aggregation parameters</b> — a set of filters — and the <code style="font-family:var(--mono);color:var(--gold);font-size:.85em">PortfolioState</code> is <i>computed</i> by replaying every event that matches them as of a point in time.</p>
+
+      <div class="agg">
+        <div class="evcol">
+          <div class="ev">execution<div class="evd">+200 @ as-of d1</div></div>
+          <div class="ev">corporate action<div class="evd">split adjust</div></div>
+          <div class="ev">partial decrease<div class="evd">−50</div></div>
+          <div class="ev">settlement<div class="evd">positionState → Settled</div></div>
+        </div>
+        <div class="conn"><span>→</span></div>
+        <div class="filterbox">
+          <div class="fk">AggregationParameters</div>
+          <ul>
+            <li><b>dateTime</b> — as of</li>
+            <li><b>totalPosition</b> — cumulative vs daily</li>
+            <li><b>positionStatus</b> — Executed / Settled…</li>
+            <li><b>party</b> · <b>product</b></li>
+            <li><b>productQualifier</b> · <b>tradeReference</b></li>
+          </ul>
+        </div>
+        <div class="conn"><span>→</span></div>
+        <div class="psnode">
+          <div class="pn">PortfolioState</div>
+          <ul><li>positions: [ … ]</li><li>+ lineage (1..1)</li></ul>
+        </div>
+      </div>
+
+      <p class="codecap" style="margin-top:8px">The state is a lineage chain — each snapshot points back to its predecessor and the events between</p>
+      <div class="chainstrip">
+        <div class="psnap genesis"><div class="pt">PortfolioState₀</div><div class="pd">genesis · positions ø</div></div>
+        <div class="lineagearr"><span class="lt">lineage</span><span class="ln" style="font-size:16px">→</span><span class="lb">+ events</span></div>
+        <div class="psnap"><div class="pt">PortfolioState₁</div><div class="pd">after d1 events</div></div>
+        <div class="lineagearr"><span class="lt">lineage</span><span class="ln" style="font-size:16px">→</span><span class="lb">+ events</span></div>
+        <div class="psnap"><div class="pt">PortfolioState₂</div><div class="pd">after d2 events</div></div>
+      </div>
+
+      <div class="badges">
+        <div class="badge"><span class="bk">position =</span><span class="bv" style="color:var(--p-quantity)">f(event stream, parameters, as-of)</span></div>
+        <div class="badge qual"><span class="bk">genesis rule</span><span class="bv">null prior state ⟹ positions empty</span></div>
+      </div>
+
+      <p class="codecap" style="margin-top:22px">Rune — parameters, computed state, and the lineage spine</p>
+      <pre><span class="kw">type</span> <span class="ty">Portfolio</span>:
+  aggregationParameters <span class="ty">AggregationParameters</span> (1..1)  <span class="cm">// how to aggregate</span>
+  portfolioState <span class="ty">PortfolioState</span> (1..1)            <span class="cm">// the computed result</span>
+
+<span class="kw">type</span> <span class="ty">AggregationParameters</span>:
+  dateTime <span class="ty">zonedDateTime</span> (1..1)
+  totalPosition <span class="ty">boolean</span> (0..1)        <span class="cm">// cumulative-to-date vs daily</span>
+  positionStatus <span class="ty">PositionStatusEnum</span> (0..1)
+  party <span class="ty">Party</span> (0..*)
+  product <span class="ty">NonTransferableProduct</span> (0..*)
+  productQualifier <span class="ty">string</span> (0..*)       <span class="cm">// by inferred product type</span>
+  tradeReference <span class="ty">Trade</span> (0..*)
+
+<span class="kw">type</span> <span class="ty">PortfolioState</span>:
+  positions <span class="ty">Position</span> (0..*)
+  lineage <span class="ty">Lineage</span> (1..1)            <span class="cm">// → prior PortfolioState + the events</span></pre>
+
+      <div class="callout">
+        <div class="ck">two position shapes — don't conflate them</div>
+        <p><b>Position / PortfolioState</b> is the portfolio-aggregation construct: a grouping by product or asset, computed by replay. The <code style="font-family:var(--mono);color:var(--gold);font-size:.85em">NonTransferable</code> condition requires its products be <code style="font-family:var(--mono);color:var(--gold);font-size:.85em">NonTransferableProduct</code>s — consistent with trades wrapping even transferable underliers.</p>
+        <p><b>CounterpartyPosition</b> is a separate, richer type: <code style="font-family:var(--mono);color:var(--gold);font-size:.85em">positionIdentifier</code> (incl. UTI), <code style="font-family:var(--mono);color:var(--gold);font-size:.85em">openDateTime</code>, party/partyRole <i>including the clearing organisation</i>, and <code style="font-family:var(--mono);color:var(--gold);font-size:.85em">tradeReference</code> to every constituent TradeState. This is the CCP-aware shape — the one that maps to the cleared-member exposure picture.</p>
+      </div>
+
+      <p class="why"><b>Materialise, but reconcile.</b> Replaying from genesis on every query is expensive, so <span style="color:var(--p-quantity)">PortfolioState</span> is built as a chain of snapshots you extend from the latest — the same caching discipline as a knock-in latch or a product-version cache. The <span style="color:var(--p-party)">lineage</span> (globalKey hashes into the prior state and the events) is what lets you prove a snapshot is faithful and rebuild it if you don't trust it.</p>
+    </div>
+
+    <!-- settlement / T+x -->
+    <div class="ex panel" style="margin-top:22px">
+      <div class="ex-top"><span class="ex-id">Settlement · T+x</span><span class="ex-name" style="font-size:22px">A date rule, resolved to a transfer</span></div>
+      <p class="ex-econ">"T+2" is never stored as a date. It is a <b>parametric rule</b> in the terms layer — a <code style="font-family:var(--mono);color:var(--gold);font-size:.85em">RelativeDateOffset</code> off an anchor — which the lifecycle <b>resolves</b> against business-day calendars into a concrete value date, then emits the <span style="color:var(--p-transfer)">transfer</span>(s) on that date. Two layers: the rule, and the dated movement.</p>
+
+      <div class="twodim">
+        <div class="dimbox a"><div class="dk">terms layer · the rule</div><div class="dv" style="color:var(--p-quantity)">RelativeDateOffset</div><div class="dn">periodMultiplier 2 · period D · dayType Business · anchor = trade date</div></div>
+        <div class="dimbox b"><div class="dk">transfer layer · the movement</div><div class="dv" style="color:var(--p-transfer)">Transfer.settlementDate</div><div class="dn">the resolved value date · DvP pair on the day</div></div>
+      </div>
+
+      <div class="conv-cap"><b>Equity buy</b> — anchor is trade date <span>T+2</span></div>
+      <div class="flow">
+        <div class="stack"><div class="node"><div class="nlabel">terms · SettlementPayout</div><div class="ntitle">+2 business days</div><ul><li>anchor: trade date</li><li>DvP · settlementCentre</li></ul></div></div>
+        <div class="conn"><span>→</span></div>
+        <div class="ops"><div class="op quantity"><div class="opk">lifecycle resolves</div><div class="opn">RelativeDateOffset</div><div class="opnote">roll for holidays per businessDayConvention + calendars</div></div></div>
+        <div class="conn"><span>→</span></div>
+        <div class="stack"><div class="node after"><div class="nlabel">transfer · on value date</div><div class="ntitle">DvP transfer pair</div><ul><li class="add">security ⇄ cash</li><li class="add">positionState → Settled</li></ul></div></div>
+      </div>
+
+      <div class="conv-cap"><b>Structured-product coupon</b> — anchor is the period end, plus a payment lag <span>determine ≠ pay</span></div>
+      <div class="flow">
+        <div class="stack"><div class="node"><div class="nlabel">determination date</div><div class="ntitle">Coupon fixed</div><ul><li>barrier tested</li><li>amount known</li></ul></div></div>
+        <div class="conn"><span>→</span></div>
+        <div class="ops"><div class="op reset"><div class="opk">terms · PaymentDates</div><div class="opn">paymentDaysOffset</div><div class="opnote">Offset off period end · payRelativeTo = CalculationPeriodEndDate</div></div></div>
+        <div class="conn"><span>→</span></div>
+        <div class="stack"><div class="node after"><div class="nlabel">transfer · on payment date</div><div class="ntitle">Coupon settles</div><ul><li class="add">cash, issuer → holder</li><li>settlementDate = end + lag</li></ul></div></div>
+      </div>
+
+      <div class="badges">
+        <div class="badge intent"><span class="bk">transferSettlementType</span><span class="bv">DeliveryVersusPayment</span></div>
+        <div class="badge"><span class="bk">eventDate ≠ settlementDate</span><span class="bv" style="color:var(--text-dim)">determination vs payment differ by the lag</span></div>
+      </div>
+
+      <p class="codecap" style="margin-top:22px">Rune — one offset machine, two anchors</p>
+      <pre><span class="kw">type</span> <span class="ty">RelativeDateOffset</span> <span class="kw">extends</span> <span class="ty">Offset</span>:   <span class="cm">// Offset extends Period</span>
+  periodMultiplier <span class="ty">int</span>           <span class="cm">// 2   (from Period)</span>
+  period <span class="ty">PeriodEnum</span>               <span class="cm">// D   (from Period)</span>
+  dayType <span class="ty">DayTypeEnum</span> (0..1)       <span class="cm">// Business | ExchangeBusiness | Calendar…</span>
+  businessDayConvention <span class="ty">BusinessDayConventionEnum</span> (1..1)
+  businessCenters <span class="ty">BusinessCenters</span> (0..1)
+  dateRelativeTo <span class="ty">date</span> (0..1)         <span class="cm">// the anchor: trade date | period end</span>
+
+<span class="cm">// EQUITY:  settlementDate -> adjustableOrRelativeDate -> RelativeDateOffset</span>
+<span class="cm">//          anchor = trade date, +2 Business</span>
+
+<span class="cm">// COUPON:  paymentDates -> paymentDaysOffset : Offset   (the lag)</span>
+<span class="cm">//          payRelativeTo = CalculationPeriodEndDate, +x Business</span>
+
+<span class="kw">type</span> <span class="ty">Transfer</span>:
+  settlementDate <span class="ty">date</span> (1..1)         <span class="cm">// the resolved value/payment date</span></pre>
+
+      <div class="callout">
+        <div class="ck">two different offsets — don't merge them</div>
+        <p><b>Settlement cycle</b> (equity) is on <code style="font-family:var(--mono);color:var(--gold);font-size:.85em">SettlementDate.adjustableOrRelativeDate</code>, anchored to <b>trade date</b>. It answers "when does the trade settle."</p>
+        <p><b>Payment lag</b> (coupon) is <code style="font-family:var(--mono);color:var(--gold);font-size:.85em">PaymentDates.paymentDaysOffset</code> (an <code style="font-family:var(--mono);color:var(--gold);font-size:.85em">Offset</code>), anchored to the <b>calculation-period end</b> via <code style="font-family:var(--mono);color:var(--gold);font-size:.85em">payRelativeTo</code>. It answers "how long after the coupon is determined does the cash move." Positive multiplier = delayed payment; negative = early.</p>
+        <p>Same <code style="font-family:var(--mono);color:var(--gold);font-size:.85em">Offset</code> primitive underneath; different home and different anchor. Both resolve to the one <code style="font-family:var(--mono);color:var(--gold);font-size:.85em">Transfer.settlementDate</code>.</p>
+      </div>
+
+      <p class="why"><b>Determination is not payment.</b> The coupon panel's event fires on the determination date — but the <span style="color:var(--p-transfer)">transfer</span> it emits carries a <code style="font-family:var(--mono);color:var(--gold);font-size:.85em">settlementDate</code> that is the period end plus the payment lag. So a business event's <code style="font-family:var(--mono);color:var(--gold);font-size:.85em">eventDate</code> and the cash-movement date legitimately differ. For your wrapper, the offset is an input you resolve against calendars at the boundary; the canonical trade keeps the parametric rule so a calendar change re-resolves correctly.</p>
+    </div>
+  </section>
+
+  <!-- ================= 06 — THE RECONCILIATION LAYER ================= -->
+  <section class="reveal" style="animation-delay:.12s">
+    <div class="sec-head"><span class="sec-num">06</span><h2>From anatomy to engine</h2></div>
+    <p class="sec-sub">The anatomy is descriptive: every event is primitives over a <i>before</i> state. The engine adds one claim — every lifecycle event is <code>versionₙ₊₁ = f(trigger, versionₙ)</code>: a <b style="color:var(--text)">stateless</b> function, <b style="color:var(--text)">polymorphic</b> in its trigger, that fans out atomically across every position on the prior version and projects to canonical CDM events at the boundary. Two structural choices make that tractable.</p>
+
+    <!-- the abstraction -->
+    <div class="ex panel">
+      <div class="ex-top"><span class="ex-id">engine · f</span><span class="ex-name" style="font-size:22px">One function, four triggers</span></div>
+      <p class="ex-econ">An announced corporate action, a self-determined observation breach, a terms amendment, an index transition — <b>different triggers, one signature</b>. The function reads the current version and returns the next version plus the moves; it stores nothing of its own.</p>
+
+      <div class="flow">
+        <div class="stack">
+          <div class="node"><div class="nlabel">trigger · polymorphic</div><div class="ntitle">one of</div><ul><li>corporate action</li><li>observation breach</li><li>terms amendment</li><li>index transition</li></ul></div>
+        </div>
+        <div class="conn"><span>→</span></div>
+        <div class="ops"><div class="op contract"><div class="opk">stateless</div><div class="opn">f(trigger, versionₙ)</div><div class="opnote">reads version · holds no state · idempotent on the trigger id</div></div></div>
+        <div class="conn"><span>→</span></div>
+        <div class="stack">
+          <div class="node after"><div class="nlabel">after</div><div class="ntitle">versionₙ₊₁</div><ul><li class="add">new version</li><li class="add">moves appended</li></ul></div>
+          <div class="node"><div class="nlabel">projection</div><div class="ntitle">CDM events</div><ul><li>per-trade, at boundary</li></ul></div>
+        </div>
+      </div>
+
+      <div class="badges">
+        <div class="badge intent"><span class="bk">fan-out</span><span class="bv">atomic across every position on versionₙ</span></div>
+        <div class="badge qual"><span class="bk">idempotency</span><span class="bv">keyed on trigger identity (inv. 10)</span></div>
+      </div>
+
+      <p class="why"><b>Same shape as section 05's replay.</b> There a position was <code style="font-family:var(--mono);color:var(--gold);font-size:.85em">f(event stream, parameters, as-of)</code>; the engine just names the per-event step and insists the trigger be a <i>parameter</i>, not a branch — so the one <code style="font-family:var(--mono);color:var(--gold);font-size:.85em">f</code> services a split, a knock-in, and an amendment alike.</p>
+    </div>
+
+    <!-- registry + key -->
+    <div class="ex panel" style="margin-top:22px">
+      <div class="ex-top"><span class="ex-id">layer · registry</span><span class="ex-name" style="font-size:22px">Products pre-exist; trades reference them</span></div>
+      <p class="ex-econ">A contract month is listed before anyone trades it; an OTC term sheet is registered before the position books. The product is a <b>pre-existing entity</b> keyed by <code style="font-family:var(--mono);color:var(--gold);font-size:.85em">(productId, version)</code> at the payout layer — and <b>trades reference the product, never the reverse</b>. That inversion is what lets many trades share one set of terms <i>by construction</i>.</p>
+
+      <p class="codecap" style="margin-top:22px">Rune — the registry entry; terms live here, not on the trade</p>
+      <pre><span class="kw">type</span> <span class="ty">ProductRegistryEntry</span>:
+  productId <span class="ty">string</span> (1..1)              <span class="cm">// stable across versions</span>
+  version <span class="ty">int</span> (1..1)                   <span class="cm">// new terms ⟹ new entry; prior stays queryable</span>
+  listing <span class="ty">Listing</span> (0..1)              <span class="cm">// exchange / CCP / ISIN — METADATA, not a fork</span>
+  lifecyclingGrain <span class="ty">GrainEnum</span> (1..1)     <span class="cm">// trade | position</span>
+  capabilities <span class="ty">Capability</span> (0..*)        <span class="cm">// barrier, autocall, call/put — the option to act</span>
+  productState <span class="ty">ProductState</span> (1..1)      <span class="cm">// the bound parameter values</span></pre>
+
+      <div class="badges">
+        <div class="badge"><span class="bk">position key</span><span class="bv" style="color:var(--p-quantity)">(product version, internal wallet, counterparty)</span></div>
+        <div class="badge qual"><span class="bk">listed vs OTC</span><span class="bv">payoff identical · only booking topology differs</span></div>
+      </div>
+
+      <p class="why"><b>Listed-vs-OTC is not a structural fork at the payoff layer.</b> The same option payoff is the same template whether it clears at a CCP or faces a bilateral name; the venue is a field on the entry. The two-leg exchange booking model is a property of the <i>settlement</i> layer, not the product — so one lifecycle engine serves both. A barrier <code style="font-family:var(--mono);color:var(--gold);font-size:.85em">capability</code> is template metadata; the runtime <code style="font-family:var(--mono);color:var(--gold);font-size:.85em">barrier_knocked</code> latch (the cache of §05) stays on unit state.</p>
+    </div>
+
+    <!-- grain -->
+    <div class="ex panel" style="margin-top:22px">
+      <div class="ex-top"><span class="ex-id">engine · grain</span><span class="ex-name" style="font-size:22px">Lifecycling grain is a consequence of fungibility</span></div>
+      <p class="ex-econ">A product is lifecycled at one of two grains, declared on its registry entry. The choice is not free — it follows from whether one product version is <b>shared across many trades</b>.</p>
+
+      <div class="twodim">
+        <div class="dimbox a"><div class="dk">grain = position</div><div class="dv" style="color:var(--p-quantity)">fungible / listed</div><div class="dn">cash equity · futures · cleared IRS. Events service the position; per-trade CDM events are projected at the boundary.</div></div>
+        <div class="dimbox b"><div class="dk">grain = trade</div><div class="dv" style="color:var(--p-terms)">bespoke OTC</div><div class="dn">OTC option · bilateral note. The product version is unique per trade, so position == trade and no projection runs.</div></div>
+      </div>
+
+      <p class="why"><b>The two cases meet at the boundary.</b> A <code style="font-family:var(--mono);color:var(--gold);font-size:.85em">trade</code>-grained product is the degenerate <code style="font-family:var(--mono);color:var(--gold);font-size:.85em">position</code>-grained one where every position holds exactly one trade — because for bespoke terms the <code style="font-family:var(--mono);color:var(--gold);font-size:.85em">product version</code> component of the position key is unique per trade. One model; the flag just records which side you are on.</p>
+    </div>
+  </section>
+
+  <!-- ================= 07 — TWO GRAINS, PROJECTED ================= -->
+  <section class="reveal" style="animation-delay:.14s">
+    <div class="sec-head"><span class="sec-num">07</span><h2>Two grains, projected · provenance, not shape</h2></div>
+    <p class="sec-sub">Position-level events (dividend, variation margin, corporate action) are computed <b style="color:var(--text)">once</b> against the position, then <b style="color:var(--text)">down-allocated</b> losslessly to per-trade CDM events for reconciliation and counterparty interop. And two events with the same economic effect carry the <b style="color:var(--text)">same shape</b> however they arose — only provenance distinguishes them.</p>
+
+    <!-- down-allocation: two-tier VM -->
+    <div class="ex panel">
+      <div class="ex-top"><span class="ex-id">project · down-allocation</span><span class="ex-name" style="font-size:22px">One CCP figure → many internal moves</span></div>
+      <p class="ex-econ">The CCP delivers a <b>single</b> net variation-margin amount against the exchange-facing book. The ledger explodes it to one allocation per internal wallet — and the parts sum back exactly to the whole. The same pattern carries a cash dividend down to per-counterparty net amounts under different withholding rates.</p>
+
+      <div class="flow">
+        <div class="stack"><div class="node"><div class="nlabel">tier 2 · position / EFB level</div><div class="ntitle">CCP net VM</div><ul><li>one figure</li><li>EFB ⇄ CCP</li></ul></div></div>
+        <div class="conn"><span>→</span></div>
+        <div class="ops"><div class="op transfer"><div class="opk">lossless</div><div class="opn">down-allocate</div><div class="opnote">Σ tier 1 = tier 2 · same asset &amp; value date</div></div></div>
+        <div class="conn"><span>→</span></div>
+        <div class="stack">
+          <div class="node after"><div class="nlabel">tier 1 · per internal wallet</div><div class="ntitle">desk A</div><ul><li class="add">VM_A</li></ul></div>
+          <div class="node after"><div class="nlabel">tier 1</div><div class="ntitle">desk B</div><ul><li class="add">VM_B</li></ul></div>
+        </div>
+      </div>
+
+      <div class="badges">
+        <div class="badge"><span class="bk">canonical</span><span class="bv" style="color:var(--p-quantity)">position-level event</span></div>
+        <div class="badge qual"><span class="bk">derived</span><span class="bv">per-trade CDM events — re-derivable (inv. 4)</span></div>
+      </div>
+
+      <p class="why"><b>VM calculation grain and VM settlement grain are decoupled.</b> The CCP cannot see internal desks; collapsing the two tiers would either leak internal allocation to the CCP or lose desk-level P&amp;L. The two-tier split is the minimum that preserves both — and it is the canonical worked example of the projection every <code style="font-family:var(--mono);color:var(--gold);font-size:.85em">position</code>-grained product uses.</p>
+    </div>
+
+    <!-- provenance -->
+    <div class="ex panel" style="margin-top:22px">
+      <div class="ex-top"><span class="ex-id">invariant 13 · provenance</span><span class="ex-name" style="font-size:22px">Same shape, different provenance</span></div>
+      <p class="ex-econ">A move you <b>generate</b> from a primary trigger and the same move you <b>mirror</b> from a counterparty's CDM event are indistinguishable by shape. They differ only in a provenance tag carried alongside — the audit and de-duplication channel, never an economic input.</p>
+
+      <div class="compare">
+        <div class="cmp">
+          <h4><span class="pin" style="background:var(--p-execution)"></span>Primary-generated</h4>
+          <div class="ops"><div class="op transfer" style="min-width:auto"><div class="opn">transfer</div></div></div>
+          <p class="verdict">provenance = <b>Primary</b> · upstream id from QRL. Same primitives, same amounts.</p>
+        </div>
+        <div class="cmp">
+          <h4><span class="pin" style="background:var(--p-party)"></span>Reconciliation-mirrored</h4>
+          <div class="ops"><div class="op transfer" style="min-width:auto"><div class="opn">transfer</div></div></div>
+          <p class="verdict">provenance = <b>ReconciliationMirrored</b> · upstream id from a counterparty CDM event. Identical footprint.</p>
+        </div>
+      </div>
+
+      <div class="callout">
+        <div class="ck">why this is what makes interop safe</div>
+        <p>Idempotency (inv. 10) keys off the <b>upstream event identifier</b> carried in provenance. A mirrored event whose id already appears against a primary event is a <b>no-op</b> — so internal generation and CDM-native counterparty feeds run against the <i>same</i> ledger without double-booking. The corporate-action <code style="font-family:var(--mono);color:var(--gold);font-size:.85em">[mode: automated | override]</code> tag is the canonical worked example.</p>
+      </div>
+    </div>
+
+    <!-- EFB flat -->
+    <div class="ex panel" style="margin-top:22px">
+      <div class="ex-top"><span class="ex-id">invariant · EFB</span><span class="ex-name" style="font-size:22px">The exchange-facing book is structurally flat</span></div>
+      <p class="ex-econ">The internal allocation leg is part of the <b>same atomic transaction</b> as the external leg — and each internal VM allocation is part of the same daily-settlement event as the single external payment. It follows that the exchange-facing book nets to <b>zero</b> on every trade and every VM cycle.</p>
+
+      <div class="sm">
+        <div class="st settled"><div class="stn">external leg</div><div class="sts">EFB ⇄ exchange</div></div>
+        <div class="smarr"><span class="lbl">same txn</span><span class="ln">+</span></div>
+        <div class="st settled"><div class="stn">internal leg</div><div class="sts">EFB ⇄ desk</div></div>
+        <div class="smarr"><span class="lbl">net</span><span class="ln">→</span></div>
+        <div class="st"><div class="stn" style="color:var(--gold)">EFB = 0</div><div class="sts">no residual position</div></div>
+      </div>
+
+      <p class="why"><b>Reconciliation becomes a single-wallet check.</b> Any non-zero net on the EFB is, by construction, an unmatched or part-settled leg — you never have to reconcile position-by-position across internal books to find the break.</p>
+    </div>
+  </section>
+
+  <!-- ================= 08 — THE PROFILE ================= -->
+  <section class="reveal" style="animation-delay:.16s">
+    <div class="sec-head"><span class="sec-num">08</span><h2>The profile — resolving CDM's ambiguities</h2></div>
+    <p class="sec-sub">Section 04 ended on an unresolved listed-option <code>quantityChange</code>; section 05 left <code>positionState</code> caching as a discipline. Wherever the CDM is thin or admits more than one valid representation, the engine <b style="color:var(--text)">publishes the choice</b>. A documented mapping is a <b style="color:var(--text)">profile</b>; a model CDM cannot express is a <b style="color:var(--text)">fork</b>.</p>
+
+    <div class="ex panel">
+      <div class="ex-top"><span class="ex-id">profile · four resolutions</span><span class="ex-name" style="font-size:22px">Where CDM offered a choice, here is ours</span></div>
+      <div class="compare" style="margin-top:6px">
+        <div class="cmp">
+          <h4><span class="pin" style="background:var(--p-quantity)"></span>quantity.value vs multiplier</h4>
+          <p class="verdict">Position size <b>N = number of contracts</b> in <span style="color:var(--p-quantity)">quantity.value</span>; point value carried <b>once</b> as the product multiplier (Convention A of §04). Splits adjust value; the deliverable stays a terms property.</p>
+        </div>
+        <div class="cmp">
+          <h4><span class="pin" style="background:var(--p-obs)"></span>reset vs observation</h4>
+          <p class="verdict">The <span style="color:var(--p-obs)">observation</span> (fixing, barrier level, settlement price) is the <b>canonical source</b>; the <span style="color:var(--p-reset)">reset</span> onto the move is a <b>derived view</b>. Disagree ⟹ observation wins, reset recomputes.</p>
+        </div>
+        <div class="cmp">
+          <h4><span class="pin" style="background:var(--p-contract)"></span>asset vs payout · listed option</h4>
+          <p class="verdict">Modelled at the <b>payout layer</b> (<code style="font-family:var(--mono);color:var(--gold);font-size:.85em">OptionPayout</code>), same as OTC; the listing is metadata. One option engine; the CCP appears only as the counterparty wallet.</p>
+        </div>
+        <div class="cmp">
+          <h4><span class="pin" style="background:var(--p-transfer)"></span>STM vs CTM · margin</h4>
+          <p class="verdict">Cleared &amp; title-transfer VM = <b>settled-to-market</b> (the cost-basis reset of §05's futures); security-interest CSA = <b>collateralised</b>. Initial margin is collateral, out of scope.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid2">
+      <div class="callout" style="margin-top:22px">
+        <div class="ck">corporate action that changes the ladder</div>
+        <p>A merger that re-dates the coupon schedule writes a <b>new product version</b> whose terms regenerate the QRL ladder. The engine reconciles the new ladder against events already actioned on the prior version: survivors keep their marker, dropped events are cancelled, new ones schedule as <code style="font-family:var(--mono);color:var(--gold);font-size:.85em">Expected</code>. No special case — it is just <code style="font-family:var(--mono);color:var(--gold);font-size:.85em">f(trigger, versionₙ)</code>.</p>
+      </div>
+      <div class="callout" style="margin-top:22px">
+        <div class="ck">version bump, but no re-bucketing</div>
+        <p>On a <b>fungible</b> underlying the new version applies <b>in place, atomically</b> across every subscribed position (inv. 12). The unit id is stable; positions are not re-bucketed — re-bucketing would strand per-position state (cost basis, open <code style="font-family:var(--mono);color:var(--gold);font-size:.85em">Pending(date)</code>, exercise sub-buckets) with no migration rule. Same end state, none of the plumbing.</p>
+      </div>
+    </div>
+
+    <div class="punch reveal" style="margin-top:30px; animation-delay:.2s">
+      <h3>Profile, not fork</h3>
+      <p>Every resolution above keeps the engine interoperable: a CDM-native counterparty receives standard events because the divergences are documented mappings, not silent reinterpretations. The bespoke extensions that remain — <code style="font-family:var(--mono);color:var(--gold)">DailySettlementEvent</code>, the <code style="font-family:var(--mono);color:var(--gold)">Expected</code> state, the compound unit state — are flagged forks, reviewed against each CDM release. The full register lives in <code style="font-family:var(--mono);color:var(--gold)">docs/profile.md</code>.</p>
+    </div>
+  </section>
+
+  <footer>
+    <span>CDM 6.0.0 · Event Model · anatomy, state &amp; aggregation · registry, grain, projection &amp; profile</span>
+    <span>Rune signatures &amp; JSON simplified for clarity — see <a href="https://cdm.finos.org/docs/event-model">cdm.finos.org</a></span>
+  </footer>
+
+</div>
+</body>
+</html>
