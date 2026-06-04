@@ -234,3 +234,27 @@ The last row is the only case where a reversal transaction is created: the CSD c
 **CDM deviation note**: The `Expected` state has no direct equivalent in `TransferStatusEnum`. CDM's before/after state transition model treats anticipated transfers as contract terms (`ScheduledTransfer`) rather than live ledger entries. This ledger deviates by promoting the anticipated receipt to a first-class move in `Expected` state, in order to provide a complete forward cash position to downstream consumers (risk, treasury) from the point the amount is calculable.
 
 CDM reference: [Event Model](https://cdm.finos.org/docs/event-model/) · [Process Model](https://cdm.finos.org/docs/process-model/) · [FINOS CDM GitHub](https://github.com/finos/common-domain-model)
+
+---
+
+## Implementation
+
+This section binds the standalone cash-payments contract to the [External Message Interface](../implementation.md).
+
+### Inbound
+
+| Family                   | Concrete message(s)                                                                                                            | Window | Triggers                                                             |
+|--------------------------|--------------------------------------------------------------------------------------------------------------------------------|--------|----------------------------------------------------------------------|
+| `DateEvent`              | `ScheduledDate` — ex-dividend date, record date, payment date                                                                  | —      | Expected-receipt booking; settlement of receipt / payment.           |
+| `CorporateAction`        | `CashDividend` declaration; cash corporate-action proceeds (e.g. cash takeover)                                                | —      | Amount-per-share / cash consideration drives the receipt.            |
+| `OperationalInstruction` | CSD pre-advice (`camt.054` / MT910); account statement (`camt.053` / MT950); payment acknowledgement (`pacs.008` / `pacs.009`) | —      | `Expected → Instructed → Settled`; `Pending → Instructed → Settled`. |
+
+This contract consumes no `MarketObservation` — it is purely date- and feed-driven.
+
+### Outbound
+
+| Family               | Concrete message(s)                                                                                                    | CDM projection                  |
+|----------------------|------------------------------------------------------------------------------------------------------------------------|---------------------------------|
+| `Payment`            | Standalone receipt (e.g. dividend from CSD); internal allocation; expected outgoing payment; rebate / margin-call cash | `Transfer` / `CashTransfer`     |
+| `ProductStateChange` | Receipt move `Expected → Instructed → Settled`; payment move `Pending → Instructed → Settled` (or `Failed`)            | `TransferStatusEnum` vocabulary |
+| `NewProductTemplate` | None — cash payments are standalone, not product-creating.                                                             | —                               |

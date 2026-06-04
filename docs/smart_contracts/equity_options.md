@@ -327,3 +327,28 @@ CDM reference: [Event Model](https://cdm.finos.org/docs/event-model/) · [Option
 | Cash Payments        | The premium and cash settlements follow [cash_payments.md](cash_payments.md)                                                          |
 | Structured Products  | An option payoff component embedded in a structured note (e.g. a knock-in put in a reverse convertible) is governed by this document; lifecycle events propagate to the note via the QRL ladder per [structured_products.md](structured_products.md) |
 | QIS                  | A QIS composite unit may serve as the option underlying; the lifecycle is unchanged                                                  |
+
+---
+
+## Implementation
+
+This section binds the equity-options contract to the [External Message Interface](../implementation.md).
+
+### Inbound
+
+| Family                   | Concrete message(s)                                                                                        | Window               | Triggers                                                        |
+|--------------------------|------------------------------------------------------------------------------------------------------------|----------------------|-----------------------------------------------------------------|
+| `MarketObservation`      | `ReferencePrice` — reference equity price at a scheduled barrier-observation date or at expiry             | Point (date)         | Barrier-breach evaluation; expiry valuation / auto-exercise.    |
+| `MarketObservation`      | `BarrierLevel` — continuous-monitoring window (continuous-barrier products only)                           | Range (date + times) | Real-time knock-in / knock-out evaluation across the window.    |
+| `DateEvent`              | `ScheduledDate` — premium payment date, observation date, exercise calendar dates, expiry, settlement date | —                    | Premium booking; observation; exercise eligibility; settlement. |
+| `CorporateAction`        | Quantity-changing (`StockSplit` / `StockDividend`); `RightsIssue`; `SpinOff` / `Merger` / `Takeover`       | —                    | R-value / deliverable / multiplier adjustment to product state. |
+| `TradeNotification`      | Option trade execution                                                                                     | —                    | Inception; mints option units.                                  |
+| `OperationalInstruction` | Exercise notice; assignment notice; CA adjustment factor (R-value from exchange/CCP/calc agent)            | —                    | Position exercise/assignment sub-bucket; product-state version. |
+
+### Outbound
+
+| Family               | Concrete message(s)                                                                                                                                                                                         | CDM projection                                                                    |
+|----------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------|
+| `Payment`            | Premium; cash payoff (cash settlement); strike payment (physical); immediate / deferred KO rebate                                                                                                           | `Transfer` / `Exercise`                                                           |
+| `ProductStateChange` | Markers (`Premium paid`, `Barrier observed`, `Exercise/Assignment notice`, `Expiry valuation`, `Final settlement`, `Corporate action`); `barrier_knocked` flag; `Active → Matured → Expired`                | `BarrierKnockIn` `†` / `BarrierKnockOut` `†` / `Exercise` / `ContractTermination` |
+| `NewProductTemplate` | Option unit minted at inception. Adjustments during life revise the existing product state rather than creating new templates; physical exercise delivers underlying equity via [equities.md](equities.md). | `Execution`                                                                       |

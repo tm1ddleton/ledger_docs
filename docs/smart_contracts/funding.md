@@ -320,3 +320,28 @@ CDM has no business event qualification for a rate change on an existing loan (i
 | Revaluation advance or repayment fails                | Two-tier model as above. Outstanding delta is carried as an `Instructed` move until settled; it does not affect the notional reset, which has already occurred as a state event |
 | Book closed with outstanding funding position          | Funding must be terminated before book closure. Any residual notional is force-repaid via a `Pending` move flagged for operations review. Outstanding accrued interest is included in the final settlement |
 | Partial sale price differs materially from reset MtM  | The cash flow mismatch (sale price minus last reset MtM of sold position) is an intraday MtM exposure. It is automatically corrected at the next revaluation event and does not require manual intervention |
+
+---
+
+## Implementation
+
+This section binds the internal-funding contract to the [External Message Interface](../implementation.md).
+
+### Inbound
+
+| Family                   | Concrete message(s)                                                         | Window          | Triggers                                                  |
+|--------------------------|-----------------------------------------------------------------------------|-----------------|-----------------------------------------------------------|
+| `MarketObservation`      | Portfolio end-of-day MtM prices (`Close` set, one per funded asset)         | Point (date) ×N | Notional reset / revaluation event.                       |
+| `MarketObservation`      | Desk net cash balance (derived since last reset: VM, dividends, coupons)    | Point (date)    | Incorporated into the revaluation computation.            |
+| `DateEvent`              | `ScheduledDate` — revaluation date, interest payment date, termination date | —               | Notional reset; interest settlement; book wind-down.      |
+| `OperationalInstruction` | Asset settlement notification; asset disposal notification; IFR publication | —               | Funding inception; partial release; `IFRUpdateEvent` `†`. |
+
+Corporate actions are not consumed directly; dividends and coupons on funded equities settle into the desk cash balance, which the revaluation computation observes.
+
+### Outbound
+
+| Family               | Concrete message(s)                                                                                                             | CDM projection                                         |
+|----------------------|---------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------|
+| `Payment`            | Funding advance; revaluation advance/repayment; interest payment; partial repayment; final repayment + accrued interest         | `Transfer` / `InterestPayment`                         |
+| `ProductStateChange` | `Loan.notionalSchedule` reset (`QuantityChangePrimitive`); IFR rate change (state event); `TradeState → ClosedState.Terminated` | `Reset` / `IFRUpdateEvent` `†` / `ContractTermination` |
+| `NewProductTemplate` | `Loan` product per `(book, currency)` — open-term, variable-principal `MtMLinkedLoan`                                           | `Execution`                                            |

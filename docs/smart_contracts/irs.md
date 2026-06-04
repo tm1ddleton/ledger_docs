@@ -422,3 +422,29 @@ CDM reference: [Event Model](https://cdm.finos.org/docs/event-model/) · [Proces
 | [funding.md](funding.md) | Internal funding flows to support initial margin posting and collateral management |
 | [equity_options.md](equity_options.md) | Cross-reference for structured products that embed IRS-like coupon mechanics (e.g. capped floaters, range accruals) |
 | [structured_products.md](structured_products.md) | Structured products may reference IRS legs; the IRS smart contract governs the hedging instruments |
+
+---
+
+## Implementation
+
+This section binds the IRS contract to the [External Message Interface](../implementation.md).
+
+### Inbound
+
+| Family                   | Concrete message(s)                                                                                                       | Window        | Triggers                                                              |
+|--------------------------|---------------------------------------------------------------------------------------------------------------------------|---------------|-----------------------------------------------------------------------|
+| `MarketObservation`      | `Fixing` — floating reference rate (`SOFR`, `EURIBOR`, `€STR`, `Term SOFR`) for one calculation period                    | Point (date)  | Crystallises the floating-leg amount on the period's `Expected` move. |
+| `MarketObservation`      | `Fixing` (compounded) — RFR compounded-in-arrears over the calculation period                                             | Range (dates) | Floating-leg amount where the rate is set in arrears.                 |
+| `MarketObservation`      | CCP daily EOD price / bilateral CSA valuation                                                                             | Point (date)  | Variation-margin computation.                                         |
+| `DateEvent`              | `ScheduledDate` — calc-period start/end, fixing dates, payment dates, XCS notional-exchange dates, maturity; VM/IM cycles | —             | Coupon flow; margin cycle; termination.                               |
+| `OperationalInstruction` | CCP net payment instruction; IM/VM call/return; clearing (novation) instruction; ISDA default event; payment rejection    | —             | Net settlement; margin moves; novation; termination.                  |
+
+No `CorporateAction` is consumed.
+
+### Outbound
+
+| Family               | Concrete message(s)                                                                                                                     | CDM projection                                |
+|----------------------|-----------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------|
+| `Payment`            | Fixed / floating / net coupon; XCS initial & final notional exchange; VM call/return; IM top-up/return; termination (close-out) payment | `InterestPayment` / `Transfer` / `MarginCall` |
+| `ProductStateChange` | `Active → Matured → Terminated`; early break cancels future moves to `Failed` and creates termination payment                           | `Reset` / `ContractTermination`               |
+| `NewProductTemplate` | Cleared IRS contract on CCP novation — bilateral contract replaced; full schedule recreated via QRL                                     | `ClearingInstruction` / `Execution`           |

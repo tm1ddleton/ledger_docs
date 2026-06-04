@@ -400,3 +400,27 @@ QRL outputs are consumed by the smart contract at execution and stored as part o
 - The `Expected` state (used for anticipated receipts in [cash_payments.md](cash_payments.md)) is not used for FX. FX trades are initiated bilaterally, and the amounts are known at execution; there is no analogous asymmetric receipt-versus-payment distinction.
 
 CDM reference: [Event Model](https://cdm.finos.org/docs/event-model/) · [ForeignExchange product type](https://cdm.finos.org/docs/product-model/) · [FINOS CDM GitHub](https://github.com/finos/common-domain-model)
+
+---
+
+## Implementation
+
+This section binds the FX contract to the [External Message Interface](../implementation.md).
+
+### Inbound
+
+| Family                   | Concrete message(s)                                                                                                                | Window       | Triggers                                                            |
+|--------------------------|------------------------------------------------------------------------------------------------------------------------------------|--------------|---------------------------------------------------------------------|
+| `MarketObservation`      | `Fixing` — NDF fixing rate from the designated source (e.g. PBOC for USD/CNH, RBI for USD/INR)                                     | Point (date) | Net settlement amount: `(Contracted − Fixing) × Notional / Fixing`. |
+| `DateEvent`              | `ScheduledDate` — spot value date, forward value date, near / far value dates (swap), NDF fixing date, NDF settlement date         | —            | Leg settlement; NDF fixing and extinguishment.                      |
+| `OperationalInstruction` | CLS PvP settlement confirmation/failure; correspondent-bank per-leg confirmation/failure (Herstatt); mutual-agreement cancellation | —            | Position-state bucket transitions; netting; termination.            |
+
+No `CorporateAction` is consumed.
+
+### Outbound
+
+| Family               | Concrete message(s)                                                          | CDM projection                      |
+|----------------------|------------------------------------------------------------------------------|-------------------------------------|
+| `Payment`            | Buy-leg cash; sell-leg cash; NDF net settlement (settlement currency)        | `Transfer` (PvP) / `CashTransfer`   |
+| `ProductStateChange` | NDF `Active → Matured → Terminated`; CLS netting (cancel-gross / create-net) | `ContractTermination` / netting `†` |
+| `NewProductTemplate` | None — the NDF is extinguished at maturity, not replicated.                  | —                                   |

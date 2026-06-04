@@ -30,6 +30,7 @@ docs/invariants.md => invariants that are true for all smart contracts
 docs/state.md => canonical reference for the three-dimensional (Product / Unit / Position) state model used by every smart contract
 docs/events.md => a list of events, their representation in CDM, and the a cross reference of the smart contracts that they apply to
 docs/profile.md => the consolidated CDM profile: every specialisation, extension, and resolved ambiguity in one place
+docs/implementation.md => canonical reference for the external message interface — the inbound (corporate action, date, market observation) and outbound (payment, product state change, new product template) message families that each smart contract exchanges with external systems
 docs/smart_contracts/ => a document per smart contract that describes the lifecycle events that apply to each smart contract
 docs/smart_contracts/equities.md => cash equities
 docs/smart_contracts/futures.md => futures

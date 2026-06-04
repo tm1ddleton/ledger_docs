@@ -295,3 +295,30 @@ DailySettlementEvent:
 ```
 
 The `DailySettlementEvent` records the daily VM crystallisation, the cost-basis reset, and the two-tier cash structure. It is triggered by the exchange's publication of the official settlement price (or the EDSP on the expiry event).
+
+---
+
+## Implementation
+
+This section binds the futures contract to the [External Message Interface](../implementation.md).
+
+### Inbound
+
+| Family                              | Concrete message(s)                                                           | Window              | Triggers                                                       |
+|-------------------------------------|-------------------------------------------------------------------------------|---------------------|----------------------------------------------------------------|
+| `MarketObservation`                 | `DailySettlement` — exchange official settlement price                        | Point (date)        | `DailySettlementEvent`: VM crystallisation + cost-basis reset. |
+| `MarketObservation`                 | `EDSP` — Exchange Delivery Settlement Price at expiry                         | Point (date)        | Final cash settlement of the contract.                         |
+| `MarketObservation`                 | `SOQ` — Special Opening Quotation (index futures settled at the open auction) | Point (date + time) | Final settlement where the venue settles on the SOQ.           |
+| `DateEvent`                         | `BusinessDayRoll` (EOD); `ScheduledDate` — last trading / expiry date         | —                   | Daily settlement cycle; `Active → Matured` at expiry.          |
+| `TradeNotification`                 | Futures order filled                                                          | —                   | Two-leg execution; updates `costBasis` and `N`.                |
+| `SettlementFeedback` / `MarginCall` | External VM / IM settlement; CCP margin call/return                           | —                   | Tier-2 cash settlement; IM post/return.                        |
+
+No `CorporateAction` is consumed directly: corporate actions on a physically-deliverable underlying are serviced by the underlying contract on delivery.
+
+### Outbound
+
+| Family               | Concrete message(s)                                                                                                   | CDM projection                                     |
+|----------------------|-----------------------------------------------------------------------------------------------------------------------|----------------------------------------------------|
+| `Payment`            | Tier-1 internal VM (Internal Wallet ↔ EFB); Tier-2 external VM (EFB ↔ CCP); final VM at expiry; IM post/return        | `DailySettlementEvent` `†` / `MarginCall`          |
+| `ProductStateChange` | `EOD settled YYYY-MM-DD` marker; cost-basis reset (position-state); `Active → Matured → Expired`                      | `DailySettlementEvent` `†` / `ContractTermination` |
+| `NewProductTemplate` | None — futures units are consumed, not created. Physical delivery mints underlying units via the underlying contract. | —                                                  |

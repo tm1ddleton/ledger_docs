@@ -191,3 +191,27 @@ CDM `TradeState` does not natively express a compound liveliness + last-event ma
 | Equities        | Equity delivery at maturity (4b) is a share transfer following [equities.md](equities.md)                                                          |
 | Cash Payments   | Coupon and cash redemption distributions follow [cash_payments.md](cash_payments.md)                                                                |
 | QIS             | A QIS composite unit may serve as the reference underlying of the embedded option; the lifecycle is unchanged                                      |
+
+---
+
+## Implementation
+
+This section binds the structured-products contract to the [External Message Interface](../implementation.md).
+
+### Inbound
+
+| Family                   | Concrete message(s)                                                              | Window       | Triggers                                                  |
+|--------------------------|----------------------------------------------------------------------------------|--------------|-----------------------------------------------------------|
+| `MarketObservation`      | `ReferencePrice` — reference equity price on a barrier-observation date          | Point (date) | Barrier-breach evaluation (`barrier_knocked`).            |
+| `MarketObservation`      | `ReferencePrice` — final reference price at maturity                             | Point (date) | Redemption determination (cash at par vs share delivery). |
+| `DateEvent`              | `ScheduledDate` — coupon dates, barrier-observation dates, maturity, inception   | —            | Coupon payment; observation; final settlement.            |
+| `CorporateAction`        | CA on the equity underlying (propagated to the note's CA list via orchestration) | —            | Product-state adjustment of the embedded option leg.      |
+| `OperationalInstruction` | QRL coupon ladder; observation / event ladder                                    | —            | Schedule-driven invocation.                               |
+
+### Outbound
+
+| Family               | Concrete message(s)                                                                                                                                                                                                                                        | CDM projection                                         |
+|----------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------|
+| `Payment`            | Coupon cash; redemption at par; cash residual on share delivery                                                                                                                                                                                            | `InterestPayment` / `CashTransfer`                     |
+| `ProductStateChange` | `Coupon paid` / `Barrier observed` markers; `barrier_knocked` contingent flag; `Active → Matured → Expired`                                                                                                                                                | `BarrierKnockIn` `†` / `ContractTermination`           |
+| `NewProductTemplate` | Note unit at inception. Structured-product **creation** mints three products simultaneously (note + bond + option components) under the `StructuredProductCreationPrimitive`; the component contracts then service their own lifecycles via the QRL ladder | `Execution` (`StructuredProductCreationPrimitive` `†`) |

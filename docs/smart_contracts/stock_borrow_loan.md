@@ -614,3 +614,27 @@ with the client holding synthetic exposure to the inventory via TRS. The additio
 | Structured Products| The Hedging Book borrows equity to source shares for delta-hedging short barrier-put positions. The recall event is the primary operational risk: if the lender recalls securities while the Hedging Book holds them for delivery at note maturity (physical settlement scenario in [structured_products.md](structured_products.md)), operations must source replacement securities immediately |
 | Cash Payments      | Fee, rebate, manufactured payment, and margin call moves all follow the [cash_payments.md](cash_payments.md) `Expected` / `Pending` state model for asymmetric receipt vs. payment treatment |
 | FX                 | Cross-currency SBL (securities in one currency, cash collateral in another) creates a residual FX exposure from the difference between the loan currency and the collateral currency. This FX exposure is managed via [fx.md](fx.md) and is not in scope for this contract |
+
+---
+
+## Implementation
+
+This section binds the SBL contract to the [External Message Interface](../implementation.md). It is the contract with the most bespoke inbound surface, reflecting CDM's partial GMSLA coverage (see CDM Extensions above).
+
+### Inbound
+
+| Family                   | Concrete message(s)                                                                                                                                                     | Window       | Triggers                                                                                |
+|--------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------|-----------------------------------------------------------------------------------------|
+| `MarketObservation`      | `CollateralMark` — closing price of the loaned securities (daily EOD)                                                                                                   | Point (date) | Daily MtM: `Collateral = Close × N × (1 + margin%)`; margin call.                       |
+| `MarketObservation`      | `DividendPerShare` — dividend amount on the loaned security at ex-date                                                                                                  | Point (date) | Manufactured-payment amount (`div/share × on-loan qty`).                                |
+| `DateEvent`              | `ScheduledDate` — ex-date, payment date, loan maturity, recall date, rebate/fee date, substitution date                                                                 | —            | Manufactured payment; return; rebate/fee; substitution.                                 |
+| `CorporateAction`        | Dividend / coupon on the loaned security (income event over the loan term)                                                                                              | —            | `ManufacturedPaymentEvent` `†`.                                                         |
+| `OperationalInstruction` | Trade confirmation (GMSLA / EquiLend); DvD/DvP settlement confirmation/failure; margin-call deadline; recall notice; buy-in notice; collateral-substitution instruction | —            | `MarkToMarketCollateralCall` `†`, `RecallEvent` `†`, `CollateralSubstitutionEvent` `†`. |
+
+### Outbound
+
+| Family               | Concrete message(s)                                                                                                                                       | CDM projection                                                                        |
+|----------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------|
+| `Payment`            | Margin call / return; rebate (pay/receive); lending fee (pay/receive); manufactured payment (pay/receive); internal lending fee; final accrued rebate/fee | `InterestPayment` / `ManufacturedPaymentEvent` `†` / `MarkToMarketCollateralCall` `†` |
+| `ProductStateChange` | `Active → Matured → Terminated`; `QuantityChangePrimitive` on partial return/recall; collateral ISIN updated on substitution                              | `ContractTermination` / `QuantityChange` / `RecallEvent` `†`                          |
+| `NewProductTemplate` | None — SBL is a bilateral OTC instrument, not product-creating.                                                                                           | —                                                                                     |

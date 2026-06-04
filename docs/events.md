@@ -24,6 +24,8 @@ QRL is the observation / event ladder that drives smart contract invocations. Ea
 
 Per [invariant 10](invariants.md#core-ledger-invariants), each event is delivered idempotently: replays are no-ops by virtue of the unit state's last-lifecycle-event marker.
 
+QRL is the *internal router*. The *external* messages that QRL normalises into these events — the inbound `CorporateAction`, `DateEvent`, and `MarketObservation` families, and the outbound `Payment`, `ProductStateChange`, and `NewProductTemplate` families — are defined in [implementation.md](implementation.md). The CDM qualifications catalogued in the [CDM Event Reference](#cdm-event-reference) below are what the outbound `ProductStateChange` messages project onto.
+
 ---
 
 ## Projection and Down-Allocation
