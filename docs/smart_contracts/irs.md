@@ -88,7 +88,7 @@ For cleared trades, netting is performed by the CCP across all trades in the sam
 | `Matured`     | Final payment date reached; last period's moves have entered the payment state flow but have not yet all reached `Settled`                 |
 | `Terminated`  | All obligations discharged; final coupon and (for XCS) notional exchange moves have reached `Settled`; contract extinguished               |
 
-CDM `closedState` is set only on the transition to `Terminated`. The `Matured` state is carried as a bespoke field on `TradeState` without setting `closedState` (see [equity_options.md](equity_options.md) CDM Extension 3 for the general `Matured` state pattern).
+CDM `closedState` is set at the `Matured` trigger: the contract becomes `Closed` (`positionState = Closed`, `closedState.state = Terminated`, `activityDate =` the final payment date) when the last period's moves enter the payment state flow. `Matured → Terminated` is therefore **not** a CDM state transition — both liveliness values project to the same `closedState`, differing only in whether the final transfers have settled; the residual settlement tail is carried on the transfers' own `TransferStatusEnum` and on `ClosedState.lastPaymentDate`. See [Projection to CDM State](../state.md#projection-to-cdm-state).
 
 ---
 

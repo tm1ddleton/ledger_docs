@@ -90,9 +90,32 @@ A unit's state cannot differ by counterparty: a listed future cannot be `Active`
 | `Matured`  | The unit's final lifecycle event has been triggered (e.g. expiry, final fixing, full close-out) but settlement of the final move(s) is still open. |
 | `Expired`  | The unit's final settlement is complete; no further events are possible; the unit identifier is retained only for audit.      |
 
-`Active → Matured` on the contractual trigger. `Matured → Expired` once all final settlement moves reach `Settled`. CDM `closedState` is set at `Expired`.
+`Active → Matured` on the contractual trigger. `Matured → Expired` once all final settlement moves reach `Settled`. Some contracts conventionally label the terminal state `Terminated` rather than `Expired`; the two are the same terminal liveliness (see below). How these liveliness values project onto CDM's `positionState` / `closedState` axes — and why `Matured → Expired` is **not** a CDM state transition — is set out in [Projection to CDM State](#projection-to-cdm-state).
 
 For some contracts (e.g. cash equities, perpetual instruments) there is no contractual maturity: the unit remains `Active` until a corporate action or delisting extinguishes it.
+
+### Projection to CDM State
+
+Liveliness is a single axis on the unit. CDM has no equivalent single field; it splits the same information across two attributes of its `State` type:
+
+- `positionState` (`PositionStatusEnum`) — the **lifecycle axis**: *"...just executed, formed, already settled, closed, etc."*
+- `closedState` (a `ClosedState` carrying a `ClosedStateEnum`) — a **reason qualifier** that exists *only* when `positionState = Closed` (CDM's `ClosedStateExists` condition). Its values (`Matured`, `Expired`, `Terminated`, `Exercised`, `Novated`, `Cancelled`, `Allocated`) record *why* the trade closed, not where it sits in settlement.
+
+`closedState` is set once, at the closing business event, and is immutable for that `TradeState`; CDM represents any later change as a new `TradeState` in the lineage, never as a transition between `ClosedStateEnum` values. It is therefore **not** a state machine to be walked: there is no `Expired → Settled` edge, because `Settled` is a `positionState` and `Expired` a `closedState` reason — they are different axes.
+
+Our liveliness projects as follows:
+
+| Liveliness               | CDM projection                                                                                                                                                                                                 |
+|--------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `Active`                 | `positionState ∈ {Executed, Formed}`; no `closedState`.                                                                                                                                                        |
+| `Matured`                | `positionState = Closed`; `closedState.state =` the closure reason (from the last-lifecycle-event marker / CDM event qualification), `activityDate =` the trigger date. Final transfers not yet all `Settled`. |
+| `Expired` / `Terminated` | The **same** `closedState` as `Matured`; all final transfers `Settled`; `ClosedState.lastPaymentDate` reached.                                                                                                 |
+
+Two consequences follow:
+
+1. **`Matured → Expired` is not a CDM transition.** Both liveliness values project to the same `closedState`; they differ only in whether the final transfers have settled. The trade is CDM-`Closed` from the `Matured` trigger onward, and the residual settlement tail is carried where CDM puts it — on the transfers' own `TransferStatusEnum` and on `ClosedState.lastPaymentDate` (*"the date associated with the last payment in relation to the contract"*) — not by moving the trade out of `Closed`. This is the CDM-native form of the very distinction our `Matured` state makes. We need `Matured` as an explicit unit-level state only because we hold settlement on the position buckets rather than per-move, and so cannot lean on the per-transfer status CDM uses for the same purpose (see [Moves Are Fungible](#moves-are-fungible-a-deliberate-departure-from-cdm)).
+
+2. **The closure reason lives in the marker, not in liveliness.** Our single terminal liveliness value collapses CDM's distinct closure reasons; the reason is recovered from the last-lifecycle-event marker and the CDM event qualification (`ContractTermination`, `Exercise`, …). Exchange-traded and issued contracts conventionally label the terminal state `Expired` (projecting to `ClosedStateEnum.Expired` for a lapsed option, or `Matured` for a scheduled maturity); OTC contracts label it `Terminated` (projecting to `ClosedStateEnum.Terminated`). Both are the same terminal liveliness. Two reasons require bespoke `ClosedStateEnum` extensions — `Lapsed` and `BarrierKnockOut` — documented in [equity_options.md](smart_contracts/equity_options.md).
 
 ### Last-Lifecycle-Event Marker
 

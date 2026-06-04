@@ -64,7 +64,7 @@ Liveliness:
 | `Matured`  | Contract expiry reached; final settlement transaction created but not yet fully settled                             |
 | `Expired`  | All final settlement obligations discharged; futures units extinguished and (for cash settlement) final VM paid     |
 
-`Active → Matured` on contract expiry. `Matured → Expired` once all moves in the final settlement transaction reach `Settled`. CDM `closedState` is set at `Expired`.
+`Active → Matured` on contract expiry. `Matured → Expired` once all moves in the final settlement transaction reach `Settled`. CDM `closedState` is set at the `Matured` trigger (`positionState = Closed`, with the closure reason taken from the marker — `Matured` for a scheduled expiry; `activityDate =` the expiry date); the `Matured → Expired` step is the settling of the final transfers, not a CDM state transition. See [Projection to CDM State](../state.md#projection-to-cdm-state).
 
 Last-lifecycle-event marker — examples for futures:
 
@@ -253,17 +253,17 @@ QRL outputs are consumed at execution and stored as part of the trade record. Ch
 
 ## CDM Event Representation
 
-| Lifecycle Event                             | CDM Business Event Qualification             | CDM Transfer State              | Notes                                                                                  |
-|---------------------------------------------|----------------------------------------------|---------------------------------|----------------------------------------------------------------------------------------|
-| Trade execution (long)                      | `EventQualificationEnum.Execution`           | `TransferStatusEnum.Settled`    | Futures unit move CCP → Internal Wallet; updates `costBasis` and `N`                   |
-| Trade execution (short)                     | `EventQualificationEnum.Execution`           | `TransferStatusEnum.Settled`    | Futures unit move Internal Wallet → CCP; updates `costBasis` and `N`                   |
-| EOD settlement — Tier 1 internal allocation | CDM extension: `DailySettlementEvent`        | `TransferStatusEnum.Settled`    | Internal VM move per internal wallet (Internal Wallet ↔ EFB); settles immediately; position-level P&L recorded; `costBasis` reset |
-| EOD settlement — Tier 2 external VM         | CDM extension: `DailySettlementEvent`        | `Expected` / `Pending`          | Net VM move at EFB level (EFB ↔ CCP); single amount per contract; equals sum of Tier 1 allocations. `Expected` when EFB receives, `Pending` when EFB pays |
-| VM payment instructed                       | — (state transition only)                    | `TransferStatusEnum.Instructed` | Tier 2 external move only; standard payment lifecycle                                  |
-| VM payment confirmed                        | — (state transition only)                    | `TransferStatusEnum.Settled`    | Tier 2 external move settles                                                           |
-| Position close — offsetting trade           | `EventQualificationEnum.Execution`           | `TransferStatusEnum.Settled`    | Offsetting trade; processed by the same Trade Execution mechanic                       |
-| Expiry — final settlement created           | `EventQualificationEnum.ContractTermination` | `TransferStatusEnum.Pending`    | Extinguishment + final VM moves; unit state: `Active → Matured`                        |
-| Expiry — fully settled                      | — (state transition only)                    | `TransferStatusEnum.Settled`    | All final moves settled; unit state: `Matured → Expired`; CDM `closedState` set        |
+| Lifecycle Event                             | CDM Business Event Qualification             | CDM Transfer State              | Notes                                                                                                                                                           |
+|---------------------------------------------|----------------------------------------------|---------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Trade execution (long)                      | `EventQualificationEnum.Execution`           | `TransferStatusEnum.Settled`    | Futures unit move CCP → Internal Wallet; updates `costBasis` and `N`                                                                                            |
+| Trade execution (short)                     | `EventQualificationEnum.Execution`           | `TransferStatusEnum.Settled`    | Futures unit move Internal Wallet → CCP; updates `costBasis` and `N`                                                                                            |
+| EOD settlement — Tier 1 internal allocation | CDM extension: `DailySettlementEvent`        | `TransferStatusEnum.Settled`    | Internal VM move per internal wallet (Internal Wallet ↔ EFB); settles immediately; position-level P&L recorded; `costBasis` reset                               |
+| EOD settlement — Tier 2 external VM         | CDM extension: `DailySettlementEvent`        | `Expected` / `Pending`          | Net VM move at EFB level (EFB ↔ CCP); single amount per contract; equals sum of Tier 1 allocations. `Expected` when EFB receives, `Pending` when EFB pays       |
+| VM payment instructed                       | — (state transition only)                    | `TransferStatusEnum.Instructed` | Tier 2 external move only; standard payment lifecycle                                                                                                           |
+| VM payment confirmed                        | — (state transition only)                    | `TransferStatusEnum.Settled`    | Tier 2 external move settles                                                                                                                                    |
+| Position close — offsetting trade           | `EventQualificationEnum.Execution`           | `TransferStatusEnum.Settled`    | Offsetting trade; processed by the same Trade Execution mechanic                                                                                                |
+| Expiry — final settlement created           | `EventQualificationEnum.ContractTermination` | `TransferStatusEnum.Pending`    | Extinguishment + final VM moves; unit state: `Active → Matured`; CDM `closedState` set at this trigger                                                          |
+| Expiry — fully settled                      | — (state transition only)                    | `TransferStatusEnum.Settled`    | All final moves settled; unit state: `Matured → Expired`; final transfers `Settled` and `ClosedState.lastPaymentDate` reached (no new `closedState` transition) |
 
 ---
 
