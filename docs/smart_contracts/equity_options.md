@@ -41,17 +41,19 @@ The equity options smart contract is stateless. Each invocation receives Product
 
 ### Product State
 
-| Field                  | Description                                                                          |
-|------------------------|--------------------------------------------------------------------------------------|
-| `optionType`           | `Call` / `Put`                                                                       |
-| `exerciseStyle`        | `European`, `American`, or `Bermudan` (with exercise calendar)                       |
-| `strike`               | Strike price                                                                          |
-| `expiry`               | Expiry date                                                                           |
-| `underlying`           | Reference equity (single name, basket, or index)                                     |
-| `multiplier`           | Contract size (e.g. 100 shares per contract for listed options)                      |
-| `settlementType`       | `Cash` / `Physical`                                                                  |
-| `settlementCcy`        | Settlement currency                                                                   |
-| `barrier`              | Optional: `{ kind: KI / KO, level(s), monitoring: discrete / continuous, observationSchedule, rebate? }` |
+| Field                | Description                                                                                                                                                                                                                                 |
+|----------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `optionType`         | `Call` / `Put`                                                                                                                                                                                                                              |
+| `exerciseStyle`      | `European`, `American`, or `Bermudan` (with exercise calendar)                                                                                                                                                                              |
+| `exerciseProcedure`  | `Automatic(threshold)` or `Manual` — how exercise is effected at/by expiry (CDM `ExerciseTerms.exerciseProcedure`). Default `Automatic`; the threshold is the CCP ex-by-exception rule for listed options or the confirmation term for OTC. |
+| `latestExerciseTime` | The exercise cutoff on the exercise/expiry date — the "expiration time" / contrary-instruction deadline beyond which the resolution is fixed.                                                                                               |
+| `strike`             | Strike price                                                                                                                                                                                                                                |
+| `expiry`             | Expiry date                                                                                                                                                                                                                                 |
+| `underlying`         | Reference equity (single name, basket, or index)                                                                                                                                                                                            |
+| `multiplier`         | Contract size (e.g. 100 shares per contract for listed options)                                                                                                                                                                             |
+| `settlementType`     | `Cash` / `Physical`                                                                                                                                                                                                                         |
+| `settlementCcy`      | Settlement currency                                                                                                                                                                                                                         |
+| `barrier`            | Optional: `{ kind: KI / KO, level(s), monitoring: discrete / continuous, observationSchedule, rebate? }`                                                                                                                                    |
 
 For double-barrier options, `barrier.level` is a pair (upper, lower).
 
@@ -174,6 +176,8 @@ For double-barrier products the smart contract evaluates both levels at each obs
 
 Bermudan options accept exercise only on dates in the exercise calendar; the smart contract rejects (returns no-op) a notice received outside the calendar.
 
+In practice early exercise is driven by remaining time value (e.g. dividend capture on a call, deep-ITM carry on a put) and so occurs *before* the expiry date — by expiry any remaining time value is de minimis. Exercise on the expiry date itself is therefore resolved by the expiry-valuation exercise-by-exception path (§4), not by an early-exercise notice; the two paths are distinct.
+
 No moves are generated at notice time. Position state shifts:
 
 - **Long side**: move `n` from `Settled / Live` → `Settled / Exercised(D + settlementLag)`.
@@ -183,9 +187,11 @@ No unit-state marker is set: exercise and assignment are per-holder, so they are
 
 The actual delivery of underlying / cash occurs at the scheduled settlement date — see §5.
 
+*Open question (TBD) — scope of the early-exercise decision.* This section assumes the **decision** to early-exercise a long American/Bermudan position is **exogenous**: the contract processes an exercise instruction (and emits the matching instruction to the CCP/counterparty) but does not itself decide when early exercise is optimal. Whether an optimal-exercise engine — driven by QRL analytics, auto-exercising our own longs at the optimal boundary — should instead live inside the contract is not yet decided. Until resolved, only the processing is in scope; the decision is treated as external. When we are short there is no decision: an assignment arrives from the CCP/counterparty.
+
 ### 4. Expiry Valuation
 
-**Trigger**: Expiry date emitted by the QRL event ladder, with the final reference equity price.
+||
 
 The smart contract computes intrinsic value per the option type and product state:
 
@@ -196,16 +202,18 @@ Put  payoff = max(strike − S_T, 0)
 
 For a KI option with no `barrier_knocked` flag set: payoff is forced to zero (the option never activated).
 
-For all `Live` quantity at expiry:
+Resolution depends on `exerciseProcedure`:
 
-- **In the money**: auto-exercise. Move `Live → Exercised(expiry + settlementLag)` (long) or `Live → Assigned(expiry + settlementLag)` (short).
-- **Out of the money** (or unactivated KI): the option lapses.
+- **`Automatic(threshold)` — exercise-by-exception (the market default).** Every `Live` quantity ITM by at least `threshold` is auto-exercised; everything else lapses. A **contrary instruction** received by the cutoff overrides the default per position: a *do-not-exercise* suppresses an ITM auto-exercise (the quantity lapses instead), and an *exercise* instruction forces exercise of a marginal or OTM quantity.
+- **`Manual`.** Nothing auto-exercises. Only quantity covered by an exercise instruction received by the cutoff is exercised; all remaining `Live` quantity lapses.
 
-| Move (lapse)        | From            | To           | Asset            | State     |
-|---------------------|-----------------|--------------|------------------|-----------|
-| Option extinguishment | Internal Wallet | Counterparty | N option units   | `Pending` |
+For exercised quantity: move `Live → Exercised(expiry + settlementLag)` (long) or `Live → Assigned(expiry + settlementLag)` (short). For lapsing quantity, the option is extinguished:
 
-Marker → `Expiry valuation YYYY-MM-DD`. Liveliness `Active → Matured`; `Matured → Expired` once the lapse moves settle.
+| Move (lapse)          | From            | To           | Asset          | State     |
+|-----------------------|-----------------|--------------|----------------|-----------|
+| Option extinguishment | Internal Wallet | Counterparty | n option units | `Pending` |
+
+Marker → `Expiry valuation YYYY-MM-DD`. Liveliness `Active → Matured`; `Matured → Expired` once the lapse and any exercise-settlement moves settle.
 
 ### 5. Final Settlement
 
@@ -347,14 +355,14 @@ This section binds the equity-options contract to the [External Message Interfac
 
 ### Inbound
 
-| Family                   | Concrete message(s)                                                                                                    | Window               | Triggers                                                                                                   |
-|--------------------------|------------------------------------------------------------------------------------------------------------------------|----------------------|------------------------------------------------------------------------------------------------------------|
-| `MarketObservation`      | `ReferencePrice` — reference equity price at a scheduled barrier-observation date or at expiry                         | Point (date)         | Barrier-breach evaluation; expiry valuation / auto-exercise.                                               |
-| `MarketObservation`      | `BarrierLevel` — continuous-monitoring window (continuous-barrier products only)                                       | Range (date + times) | Real-time knock-in / knock-out evaluation across the window.                                               |
-| `DateEvent`              | `ScheduledDate` — premium/leg value date, observation date, exercise calendar dates, expiry, settlement date           | —                    | Premium & settlement value dates; observation; exercise eligibility (Bermudan calendar); expiry valuation. |
-| `CorporateAction`        | Quantity-changing (`StockSplit` / `StockDividend`); `RightsIssue`; `SpinOff` / `Merger` / `Takeover`                   | —                    | R-value / deliverable / multiplier adjustment to product state.                                            |
-| `TradeNotification`      | Option trade execution (carries premium and quantity — trade economics)                                                | —                    | Inception; mints option units.                                                                             |
-| `OperationalInstruction` | Exercise notice; assignment notice (trade/position-scoped → CDM `ExerciseInstruction`); CA adjustment factor (R-value) | —                    | Position exercise/assignment sub-bucket; product-state version.                                            |
+| Family                   | Concrete message(s)                                                                                                                                      | Window               | Triggers                                                                                                                 |
+|--------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------|--------------------------------------------------------------------------------------------------------------------------|
+| `MarketObservation`      | `ReferencePrice` — reference equity price at a scheduled barrier-observation date or at expiry                                                           | Point (date)         | Barrier-breach evaluation; expiry valuation / auto-exercise.                                                             |
+| `MarketObservation`      | `BarrierLevel` — continuous-monitoring window (continuous-barrier products only)                                                                         | Range (date + times) | Real-time knock-in / knock-out evaluation across the window.                                                             |
+| `DateEvent`              | `ScheduledDate` — premium/leg value date, observation date, exercise calendar dates, exercise cutoff (`latestExerciseTime`), settlement date             | —                    | Premium & settlement value dates; observation; exercise eligibility (Bermudan calendar); expiry valuation at the cutoff. |
+| `CorporateAction`        | Quantity-changing (`StockSplit` / `StockDividend`); `RightsIssue`; `SpinOff` / `Merger` / `Takeover`                                                     | —                    | R-value / deliverable / multiplier adjustment to product state.                                                          |
+| `TradeNotification`      | Option trade execution (carries premium and quantity — trade economics)                                                                                  | —                    | Inception; mints option units.                                                                                           |
+| `OperationalInstruction` | Exercise notice; contrary / do-not-exercise instruction (by the cutoff); assignment notice (→ CDM `ExerciseInstruction`); CA adjustment factor (R-value) | —                    | Position exercise/assignment sub-bucket; expiry override; product-state version.                                         |
 
 ### Outbound
 
