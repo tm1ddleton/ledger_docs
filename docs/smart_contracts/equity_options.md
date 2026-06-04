@@ -51,14 +51,15 @@ The equity options smart contract is stateless. Each invocation receives Product
 | `multiplier`           | Contract size (e.g. 100 shares per contract for listed options)                      |
 | `settlementType`       | `Cash` / `Physical`                                                                  |
 | `settlementCcy`        | Settlement currency                                                                   |
-| `premium`              | Premium amount and payment date                                                       |
 | `barrier`              | Optional: `{ kind: KI / KO, level(s), monitoring: discrete / continuous, observationSchedule, rebate? }` |
 
 For double-barrier options, `barrier.level` is a pair (upper, lower).
 
+**Premium and traded quantity are trade economics, not product state.** The premium (the consideration of the opening trade) and the quantity `N` arrive on the `TradeNotification` and settle like any trade leg; they are not parameters of the option product. Product state is what the instrument *is* — type, strike, expiry, underlying, multiplier, settlement, barriers — independent of any particular trade in it.
+
 ### Unit State
 
-Unit state is compound with three parts — liveliness, last-lifecycle-event marker, and corporate-actions-applied list — per the global model in [state.md](../state.md), written together as e.g. `Active | Barrier observed 2026-02-15 | CAs: []` or `Active (barrier_knocked) | Exercise notice 2026-04-10 | CAs: [split 2025-08-15]`. Corporate actions on the underlying propagate to the option via the [Corporate Action Orchestration](../invariants.md#corporate-action-orchestration) model and are appended to the option unit's CA list.
+Unit state is compound with three parts — liveliness, last-lifecycle-event marker, and corporate-actions-applied list — per the global model in [state.md](../state.md), written together as e.g. `Active | Barrier observed 2026-02-15 | CAs: []` or `Active (barrier_knocked) | Expiry valuation 2026-04-10 | CAs: [split 2025-08-15]`. Corporate actions on the underlying propagate to the option via the [Corporate Action Orchestration](../invariants.md#corporate-action-orchestration) model and are appended to the option unit's CA list.
 
 Liveliness:
 
@@ -76,17 +77,15 @@ Contingent flags carried within the liveliness component:
 
 Last-lifecycle-event marker — examples:
 
-| Marker                              | Set by                                                          |
-|-------------------------------------|-----------------------------------------------------------------|
-| `Premium paid YYYY-MM-DD`           | Inception (premium settlement)                                  |
-| `Barrier observed YYYY-MM-DD`       | A barrier observation event (regardless of breach outcome)      |
-| `Exercise notice YYYY-MM-DD`        | Holder exercises (American/Bermudan)                            |
-| `Assignment notice YYYY-MM-DD`      | Writer is assigned (mirror of exercise notice)                  |
-| `Expiry valuation YYYY-MM-DD`       | Expiry-date fixing observed                                     |
-| `Final settlement YYYY-MM-DD`       | Final settlement transaction created (cash or physical)         |
-| `Corporate action YYYY-MM-DD`       | A corporate-action adjustment applied to product state          |
+| Marker                        | Set by                                                     |
+|-------------------------------|------------------------------------------------------------|
+| `Inception YYYY-MM-DD`        | The opening trade (option unit created)                    |
+| `Barrier observed YYYY-MM-DD` | A barrier observation event (regardless of breach outcome) |
+| `Expiry valuation YYYY-MM-DD` | Expiry-date fixing observed                                |
+| `Final settlement YYYY-MM-DD` | Final settlement transaction created (cash or physical)    |
+| `Corporate action YYYY-MM-DD` | A corporate-action adjustment applied to product state     |
 
-Per [invariant 10](../invariants.md#core-ledger-invariants), the smart contract checks the marker before generating moves; a re-fed observation, exercise notice, or expiry already recorded is a no-op.
+Per [invariant 10](../invariants.md#core-ledger-invariants), the smart contract checks the marker before generating moves; a re-fed observation or expiry already recorded is a no-op. Exercise and assignment are **not** unit-state markers: they vary by holder — one counterparty may exercise an American option while others do not — so they live in position state (the `Exercised(date)` / `Assigned(date)` sub-bucket below), and their idempotency is enforced there rather than via the unit marker.
 
 ### Position State
 
@@ -153,7 +152,7 @@ The option unit is created and the premium cash flow is generated in a single at
 
 For a sold option the directions of both moves reverse.
 
-Position state after inception: `Pending(premium settlement date) / Live = N`. Unit state: `Active | Premium paid YYYY-MM-DD` once the premium cash flow settles.
+Position state after inception: `Pending(premium settlement date) / Live = N`. Unit state: `Active | Inception YYYY-MM-DD`. The premium is a **trade** economic term — the consideration of the opening trade, carried on the `TradeNotification`, not a product-state parameter; its settlement is a position-state bucket transition (`Pending → Settled`), not a unit-level lifecycle marker.
 
 The premium is the only cash flow this smart contract creates at inception; any margin posting is a booking concern per [invariant 11](../invariants.md#core-ledger-invariants).
 
@@ -180,7 +179,7 @@ No moves are generated at notice time. Position state shifts:
 - **Long side**: move `n` from `Settled / Live` → `Settled / Exercised(D + settlementLag)`.
 - **Short side**: move `n` from `Settled / Live` → `Settled / Assigned(D + settlementLag)`.
 
-Marker → `Exercise notice YYYY-MM-DD` (or `Assignment notice YYYY-MM-DD`). The settlement date `D + settlementLag` is determined by `settlementType` (typically T+1 cash, T+2 physical).
+No unit-state marker is set: exercise and assignment are per-holder, so they are recorded only in position state (the sub-bucket shift above), and idempotency is enforced there. The settlement date `D + settlementLag` is determined by `settlementType` (typically T+1 cash, T+2 physical).
 
 The actual delivery of underlying / cash occurs at the scheduled settlement date — see §5.
 
@@ -307,6 +306,18 @@ Where no standard determination applies, parties may agree a bespoke treatment r
 | Physical settlement             | `Transfer` with `PhysicalSettlementTerms`                                                                 |
 | Corporate-action adjustment     | Bespoke parameter-update event on the option `TradeState`                                                 |
 
+**Exercise message (American / Bermudan).** A holder's exercise — and the writer's mirror assignment — is an inbound instruction scoped to a **trade/position**, not to the option unit. It qualifies as `EventQualificationEnum.Exercise` and projects to CDM `ExerciseInstruction`:
+
+| CDM field (`ExerciseInstruction`)                      | Carries                                                                            |
+|--------------------------------------------------------|------------------------------------------------------------------------------------|
+| `exerciseQuantity` (`PrimitiveInstruction`, 1..1)      | The quantity exercised and the resulting position change (`n` units → settlement). |
+| `exerciseOption` (`Payout`, 0..1)                      | Which payout / leg of the trade is exercised (for multi-payout products).          |
+| `exerciseDate` (`AdjustableOrAdjustedDate`, 0..1)      | The exercise date `D`.                                                             |
+| `exerciseTime` (`BusinessCenterTime`, 0..1)            | The exercise time, where the notice deadline matters.                              |
+| `replacementTradeIdentifier` (`TradeIdentifier`, 0..*) | Identifier(s) for the resulting trade (e.g. the physically-delivered equity).      |
+
+Notice mechanics — who notifies whom, the notice deadline, manual vs automatic exercise — are **product terms** held in CDM `ExerciseTerms.exerciseProcedure`, not in the instruction. In this model the notice arrives as an `OperationalInstruction` (see [implementation.md](../implementation.md)) whose envelope `target` is the `(option unit, wallet, counterparty wallet)` position; the contract shifts that position's `Live → Exercised(date)` / `Assigned(date)` sub-bucket and writes nothing to unit state. (The deprecated CDM `ExerciseEvent` — a rates-era type — is not used.)
+
 ### CDM Extensions
 
 The compound unit state and bucketed/exercise-extended position state are global state-model features documented in [state.md](../state.md). The product-specific extensions required here are:
@@ -336,19 +347,19 @@ This section binds the equity-options contract to the [External Message Interfac
 
 ### Inbound
 
-| Family                   | Concrete message(s)                                                                                        | Window               | Triggers                                                        |
-|--------------------------|------------------------------------------------------------------------------------------------------------|----------------------|-----------------------------------------------------------------|
-| `MarketObservation`      | `ReferencePrice` — reference equity price at a scheduled barrier-observation date or at expiry             | Point (date)         | Barrier-breach evaluation; expiry valuation / auto-exercise.    |
-| `MarketObservation`      | `BarrierLevel` — continuous-monitoring window (continuous-barrier products only)                           | Range (date + times) | Real-time knock-in / knock-out evaluation across the window.    |
-| `DateEvent`              | `ScheduledDate` — premium payment date, observation date, exercise calendar dates, expiry, settlement date | —                    | Premium booking; observation; exercise eligibility; settlement. |
-| `CorporateAction`        | Quantity-changing (`StockSplit` / `StockDividend`); `RightsIssue`; `SpinOff` / `Merger` / `Takeover`       | —                    | R-value / deliverable / multiplier adjustment to product state. |
-| `TradeNotification`      | Option trade execution                                                                                     | —                    | Inception; mints option units.                                  |
-| `OperationalInstruction` | Exercise notice; assignment notice; CA adjustment factor (R-value from exchange/CCP/calc agent)            | —                    | Position exercise/assignment sub-bucket; product-state version. |
+| Family                   | Concrete message(s)                                                                                                    | Window               | Triggers                                                                                                   |
+|--------------------------|------------------------------------------------------------------------------------------------------------------------|----------------------|------------------------------------------------------------------------------------------------------------|
+| `MarketObservation`      | `ReferencePrice` — reference equity price at a scheduled barrier-observation date or at expiry                         | Point (date)         | Barrier-breach evaluation; expiry valuation / auto-exercise.                                               |
+| `MarketObservation`      | `BarrierLevel` — continuous-monitoring window (continuous-barrier products only)                                       | Range (date + times) | Real-time knock-in / knock-out evaluation across the window.                                               |
+| `DateEvent`              | `ScheduledDate` — premium/leg value date, observation date, exercise calendar dates, expiry, settlement date           | —                    | Premium & settlement value dates; observation; exercise eligibility (Bermudan calendar); expiry valuation. |
+| `CorporateAction`        | Quantity-changing (`StockSplit` / `StockDividend`); `RightsIssue`; `SpinOff` / `Merger` / `Takeover`                   | —                    | R-value / deliverable / multiplier adjustment to product state.                                            |
+| `TradeNotification`      | Option trade execution (carries premium and quantity — trade economics)                                                | —                    | Inception; mints option units.                                                                             |
+| `OperationalInstruction` | Exercise notice; assignment notice (trade/position-scoped → CDM `ExerciseInstruction`); CA adjustment factor (R-value) | —                    | Position exercise/assignment sub-bucket; product-state version.                                            |
 
 ### Outbound
 
-| Family               | Concrete message(s)                                                                                                                                                                                         | CDM projection                                                                    |
-|----------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------|
-| `Payment`            | Premium; cash payoff (cash settlement); strike payment (physical); immediate / deferred KO rebate                                                                                                           | `Transfer` / `Exercise`                                                           |
-| `ProductStateChange` | Markers (`Premium paid`, `Barrier observed`, `Exercise/Assignment notice`, `Expiry valuation`, `Final settlement`, `Corporate action`); `barrier_knocked` flag; `Active → Matured → Expired`                | `BarrierKnockIn` `†` / `BarrierKnockOut` `†` / `Exercise` / `ContractTermination` |
-| `NewProductTemplate` | Option unit minted at inception. Adjustments during life revise the existing product state rather than creating new templates; physical exercise delivers underlying equity via [equities.md](equities.md). | `Execution`                                                                       |
+| Family               | Concrete message(s)                                                                                                                                                                                                                    | CDM projection                                                                    |
+|----------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------|
+| `Payment`            | Premium; cash payoff (cash settlement); strike payment (physical); immediate / deferred KO rebate                                                                                                                                      | `Transfer` / `Exercise`                                                           |
+| `ProductStateChange` | Unit markers (`Inception`, `Barrier observed`, `Expiry valuation`, `Final settlement`, `Corporate action`); `barrier_knocked` flag; `Active → Matured → Expired`; **position-state** exercise/assignment sub-bucket shift (per-holder) | `BarrierKnockIn` `†` / `BarrierKnockOut` `†` / `Exercise` / `ContractTermination` |
+| `NewProductTemplate` | Option unit minted at inception. Adjustments during life revise the existing product state rather than creating new templates; physical exercise delivers underlying equity via [equities.md](equities.md).                            | `Execution`                                                                       |
