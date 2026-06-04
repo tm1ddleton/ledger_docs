@@ -43,7 +43,7 @@ The structured products in scope (Germany MVP) and their decompositions are list
 |----------------------------------|--------|--------|---------------|---------------|------------|----------|-------------|
 | Barrier Reverse Convertible      | ✅      | ✅      | ✅             | —             | European   | ⚠        | ⚠           |
 | Barrier Reverse Convertible Pro  | ✅      | ✅      | —             | ✅             | European   | ⚠        | ⚠           |
-| Bonus Certificate                | ✅      | —      | ✅             | —             | European   | ⚠        | ⚠           |
+| Bonus Certificate                | ✅      | —      | —             | ✅             | European   | ⚠        | ⚠           |
 | Capped Bonus Certificate         | ✅      | —      | ✅             | —             | European   | ⚠        | ⚠           |
 | Capped Bonus Pro Certificate     | ✅      | —      | —             | ✅             | European   | ⚠        | ⚠           |
 | Capped Warrant                   | ✅      | —      | —             | —             | European   | ⚠        | ⚠           |
@@ -59,7 +59,7 @@ The structured products in scope (Germany MVP) and their decompositions are list
 **Scope notes:**
 
 - **Coupon** applies only to the coupon-bearing reverse convertibles; the certificates are built on **zero** bonds and pay no periodic coupon (their return is delivered at redemption).
-- **Continuous vs discrete barrier** distinguishes continuous (intraday) monitoring from discrete observation-date monitoring — the same distinction as the `barrier.monitoring` field in [equity_options.md](equity_options.md). The "Pro" variants use discrete monitoring.
+- **Continuous vs discrete barrier** distinguishes continuous (intraday) monitoring from discrete observation-date monitoring — the same distinction as the `barrier.monitoring` field in [equity_options.md](equity_options.md). The "Pro" variants use discrete monitoring. The smart-contract logic is **agnostic** to which is used: the two differ only in the source and timing of the barrier-observation event (a `MarketObservation` Point vs Range), not in the payoff logic, so the continuous/discrete flag matters for the feed, not the breach evaluation. The column is therefore indicative; e.g. the Bonus Certificate is treated here as discrete.
 - **Dividend and stock split are `⚠`** for every equity-underlying note: they are not note-level cash events but corporate actions that re-strike / re-size the embedded option via product state. This is exactly the inbound `CorporateAction` → outbound `ProductStateChange` path in [implementation.md](../implementation.md).
 - **Mini Certificate / Open End Turbo** are modelled as a `BarrierOption` approximation and require the barrier monitor to handle **intraday issuance**; the Open End Turbo is **perpetual** (no scheduled expiry — it terminates on knock-out).
 - **Factor Certificate** is on hold pending the factor-index calculation and is not yet modelled.
