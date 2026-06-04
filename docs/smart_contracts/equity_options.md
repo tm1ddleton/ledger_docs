@@ -125,6 +125,8 @@ Total options held = sum across all cells = 125. Of those, 5 are awaiting underl
 
 For European options the `Exercised`/`Assigned` sub-buckets remain empty until the expiry event itself, at which point the `Live` quantity (if ITM) transitions to `Exercised(expiry + n)` automatically. The exercise dimension is therefore degenerate (always `Live`) for European options pre-expiry.
 
+**Issuance dimension (continuously-issued products).** For open-end products issued intraday on a rolling basis (mini certificates, open-end turbos) each issued tranche additionally carries an `issuanceTimestamp`. This is a product-specific position-state extension (cf. the futures cost-basis scalar in [state.md](../state.md)); the barrier monitor uses it to intersect the continuous-monitoring window with each tranche's issuance time (see §2). It is absent for ordinary options, which are not issued intraday.
+
 ### Data Requirements
 
 | Input                                            | Cadence                                | Source              |
@@ -169,6 +171,8 @@ State-only event — no cash or unit moves are generated.
 - **KO breach**: contingent flag `barrier_knocked` set; liveliness `Active → Matured`. The KO terminates the option — see §6 KO Termination.
 
 For double-barrier products the smart contract evaluates both levels at each observation. Continuous and discrete monitoring differ only in event source and timing; the smart contract logic is identical.
+
+**Issuance-time-aware monitoring (continuously-issued products).** Where units of a single instrument are issued intraday on a rolling basis — open-end turbos and mini certificates (see [structured_products.md](structured_products.md)) — barrier evaluation must be issuance-time-aware. Each issued tranche carries an `issuanceTimestamp` (see Position State), and a continuous-barrier breach at time `t` affects only units in existence at `t`: the barrier-evaluation window for a holding is `[max(issuanceTimestamp, scheduleStart), end]`. Two rules follow: (i) a unit must not be issued into an already-breached barrier — issuance after a same-session touch is rejected; and (ii) a breach is never applied retroactively to a tranche issued after it. The issuance timestamp is the only extra input the monitor needs; the breach logic is otherwise unchanged.
 
 ### 3. Exercise Notice (American / Bermudan)
 
