@@ -229,7 +229,7 @@ For physically deliverable futures (e.g. single-stock futures, bond futures), ex
 At expiry:
 
 - The futures unit is extinguished as in the cash settlement path.
-- Additional delivery moves are created representing the exchange of the underlying and the delivery price cash payment, following the settlement model of the applicable underlying smart contract (see [equities.md](equities.md), [bonds.md](bonds.md)).
+- Additional delivery moves are created representing the exchange of the underlying and the delivery price cash payment, following the settlement model of the applicable underlying smart contract (see [equities.md](equities.md), [bonds_wip.md](bonds_wip.md)).
 - Final VM on the last trading day is calculated and settled as in the cash settlement path.
 
 Unit state follows the same `Active → Matured → Expired` path: `Matured` when the final settlement transaction (including delivery moves) is created; `Expired` when all moves have settled.

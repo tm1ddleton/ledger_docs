@@ -36,13 +36,15 @@ docs/smart_contracts/equities.md => cash equities
 docs/smart_contracts/futures.md => futures
 docs/smart_contracts/funding.md => funding
 docs/smart_contracts/equity_options.md => options
-docs/smart_contracts/bonds.md => bonds
-docs/smart_contracts/fx.md => FX (spot, forward, swap, NDF)
-docs/smart_contracts/irs.md => interest rate swaps
+docs/smart_contracts/bonds_wip.md => bonds
+docs/smart_contracts/fx_wip.md => FX (spot, forward, swap, NDF)
+docs/smart_contracts/irs_wip.md => interest rate swaps
 docs/smart_contracts/structured_products.md => structured products
-docs/smart_contracts/qis.md => quantitative investment strategies
+docs/smart_contracts/qis_wip.md => quantitative investment strategies
 docs/smart_contracts/cash_payments.md => standalone cash payments
-docs/smart_contracts/stock_borrow_loan.md => stock borrow / loan (SBL)
+docs/smart_contracts/stock_borrow_loan_wip.md => stock borrow / loan (SBL)
+
+Note: the `_wip` filename suffix marks a smart-contract document that has not yet been reviewed and should not be relied on. Reviewed contracts (equities, equity_options, cash_payments, funding, futures, structured_products) carry no suffix. When a `_wip` document is reviewed, drop the suffix and update the links that point to it.
 
 ## DO
 

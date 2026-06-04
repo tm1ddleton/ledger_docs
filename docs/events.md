@@ -60,19 +60,19 @@ A single cash dividend on one equity is a position-grained event, but it down-al
 
 ## Contract Abbreviations
 
-| Abbr | Smart Contract                                                               |
-|------|------------------------------------------------------------------------------|
-| Eq   | [Cash Equities](smart_contracts/equities.md)                                 |
-| Fut  | [Futures](smart_contracts/futures.md)                                        |
-| Fund | [Internal Treasury Funding](smart_contracts/funding.md)                      |
-| Opt  | [Equity Options](smart_contracts/equity_options.md)                          |
-| Bond | [Bonds](smart_contracts/bonds.md)                                            |
-| FX   | [FX — Spot, Forward, Swap, NDF](smart_contracts/fx.md)                       |
-| IRS  | [Interest Rate Swaps](smart_contracts/irs.md)                                |
-| QIS  | [Quantitative Investment Strategies](smart_contracts/qis.md)                 |
-| SP   | [Structured Products](smart_contracts/structured_products.md)                |
-| Cash | [Standalone Cash Payments](smart_contracts/cash_payments.md)                 |
-| SBL  | [Stock Borrow / Loan](smart_contracts/stock_borrow_loan.md)                  |
+| Abbr | Smart Contract                                                   |
+|------|------------------------------------------------------------------|
+| Eq   | [Cash Equities](smart_contracts/equities.md)                     |
+| Fut  | [Futures](smart_contracts/futures.md)                            |
+| Fund | [Internal Treasury Funding](smart_contracts/funding.md)          |
+| Opt  | [Equity Options](smart_contracts/equity_options.md)              |
+| Bond | [Bonds](smart_contracts/bonds_wip.md)                            |
+| FX   | [FX — Spot, Forward, Swap, NDF](smart_contracts/fx_wip.md)       |
+| IRS  | [Interest Rate Swaps](smart_contracts/irs_wip.md)                |
+| QIS  | [Quantitative Investment Strategies](smart_contracts/qis_wip.md) |
+| SP   | [Structured Products](smart_contracts/structured_products.md)    |
+| Cash | [Standalone Cash Payments](smart_contracts/cash_payments.md)     |
+| SBL  | [Stock Borrow / Loan](smart_contracts/stock_borrow_loan_wip.md)  |
 
 ---
 
@@ -299,29 +299,29 @@ A single cash dividend on one equity is a position-grained event, but it down-al
 
 ### Termination and Maturity
 
-| Event                                      | CDM Qualification                            | Ext | Initial Move State / Notes                                   |
-|--------------------------------------------|----------------------------------------------|-----|--------------------------------------------------------------|
-| Maturity (scheduled; final payment)        | — (final coupon; no special qualification)   |     | Existing `Expected` moves advance through payment state flow |
-| SBL Maturity / Loan Termination            | `ContractTermination`                        |     | Securities return `Pending`; collateral release `Expected`; final fee `Expected`/`Pending` |
-| Futures Expiry — Cash Settlement           | `ContractTermination`                        |     | Extinguishment `Pending`; final VM `Expected`                |
-| Futures Expiry — Physical Delivery         | `ContractTermination`                        |     | Per underlying contract (equities.md / bonds.md)             |
-| Futures Position Close                     | `Execution` (offsetting trade)               |     | `Settled` (futures unit); updates `costBasis` and `N`        |
-| NDF Maturity / Unit Extinguishment         | `ContractTermination`                        |     | `Pending`; NDF state `Active → Matured → Terminated`         |
-| FX Early Termination (pre-settlement)      | —                                            |     | `Pending` / `Instructed → Failed`; no reversal               |
-| Bond — Early Redemption by Issuer (Call)   | `EarlyTerminationProvision`                  |     | Bond return `Instructed`; redemption cash `Expected`         |
-| Bond — Early Redemption by Holder (Put)    | `OptionalEarlyTermination`                   |     | Same move structure as call redemption                       |
-| Bond Conversion (Convertible)              | `ConversionFeature`                          |     | Bond units extinguished `Instructed`; equity units created   |
-| Bond Sale (Secondary Market)               | `Execution`                                  |     | `Instructed` (exchange) / `Pending` (OTC)                    |
-| Issuer Default                             | —                                            |     | All outstanding `Expected` / `Instructed` income → `Failed`  |
-| Partial Return / Partial Termination       | `QuantityChange` / `QuantityChangePrimitive` |     | Future `Expected` → `Failed` (IRS/Fund); proportional collateral release (SBL) |
-| Full Termination / Early Break             | `Termination` / `ContractTermination`        |     | Future `Expected` → `Failed`; termination / final payment `Pending` |
-| Recall (lender-initiated)                  | `RecallEvent`                                | †   | State event on recall date; settlement moves `Pending` / `Expected` with recall date |
-| Collateral Substitution                    | `CollateralSubstitutionEvent`                | †   | New collateral `Pending`; old collateral `Expected`; atomic DvD |
-| Funding Termination (book closed)          | `ContractTermination`                        |     | Residual notional `Pending`; accrued interest `Expected`     |
-| Composite Unit Redemption                  | `Transfer` / `ContractTermination`           |     | Units `Instructed`; redemption cash `Expected` (funded) / `Pending` (unfunded loss) |
-| Strategy Termination                       | `ContractTermination`                        |     | Simulated wallet unwound; all units retired                  |
-| Note Redemption — Cash                     | `ContractTermination`                        |     | `Expected → Settled`; all three product `TradeState`s closed |
-| Note Redemption — Physical (share delivery)| `OptionExercise` + `ContractTermination`     | †   | `NotePhysicalRedemptionEvent`; shares `Pending`; bond principal internal |
+| Event                                       | CDM Qualification                            | Ext | Initial Move State / Notes                                                                 |
+|---------------------------------------------|----------------------------------------------|-----|--------------------------------------------------------------------------------------------|
+| Maturity (scheduled; final payment)         | — (final coupon; no special qualification)   |     | Existing `Expected` moves advance through payment state flow                               |
+| SBL Maturity / Loan Termination             | `ContractTermination`                        |     | Securities return `Pending`; collateral release `Expected`; final fee `Expected`/`Pending` |
+| Futures Expiry — Cash Settlement            | `ContractTermination`                        |     | Extinguishment `Pending`; final VM `Expected`                                              |
+| Futures Expiry — Physical Delivery          | `ContractTermination`                        |     | Per underlying contract (equities.md / bonds_wip.md)                                       |
+| Futures Position Close                      | `Execution` (offsetting trade)               |     | `Settled` (futures unit); updates `costBasis` and `N`                                      |
+| NDF Maturity / Unit Extinguishment          | `ContractTermination`                        |     | `Pending`; NDF state `Active → Matured → Terminated`                                       |
+| FX Early Termination (pre-settlement)       | —                                            |     | `Pending` / `Instructed → Failed`; no reversal                                             |
+| Bond — Early Redemption by Issuer (Call)    | `EarlyTerminationProvision`                  |     | Bond return `Instructed`; redemption cash `Expected`                                       |
+| Bond — Early Redemption by Holder (Put)     | `OptionalEarlyTermination`                   |     | Same move structure as call redemption                                                     |
+| Bond Conversion (Convertible)               | `ConversionFeature`                          |     | Bond units extinguished `Instructed`; equity units created                                 |
+| Bond Sale (Secondary Market)                | `Execution`                                  |     | `Instructed` (exchange) / `Pending` (OTC)                                                  |
+| Issuer Default                              | —                                            |     | All outstanding `Expected` / `Instructed` income → `Failed`                                |
+| Partial Return / Partial Termination        | `QuantityChange` / `QuantityChangePrimitive` |     | Future `Expected` → `Failed` (IRS/Fund); proportional collateral release (SBL)             |
+| Full Termination / Early Break              | `Termination` / `ContractTermination`        |     | Future `Expected` → `Failed`; termination / final payment `Pending`                        |
+| Recall (lender-initiated)                   | `RecallEvent`                                | †   | State event on recall date; settlement moves `Pending` / `Expected` with recall date       |
+| Collateral Substitution                     | `CollateralSubstitutionEvent`                | †   | New collateral `Pending`; old collateral `Expected`; atomic DvD                            |
+| Funding Termination (book closed)           | `ContractTermination`                        |     | Residual notional `Pending`; accrued interest `Expected`                                   |
+| Composite Unit Redemption                   | `Transfer` / `ContractTermination`           |     | Units `Instructed`; redemption cash `Expected` (funded) / `Pending` (unfunded loss)        |
+| Strategy Termination                        | `ContractTermination`                        |     | Simulated wallet unwound; all units retired                                                |
+| Note Redemption — Cash                      | `ContractTermination`                        |     | `Expected → Settled`; all three product `TradeState`s closed                               |
+| Note Redemption — Physical (share delivery) | `OptionExercise` + `ContractTermination`     | †   | `NotePhysicalRedemptionEvent`; shares `Pending`; bond principal internal                   |
 
 ### QIS Rebalancing
 
@@ -357,7 +357,7 @@ Cash dividends, stock splits, reverse stock splits, and scrip dividends are now 
 
 ### 2. SBL CDM Coverage — Partial
 
-CDM v5 covers approximately two-thirds of GMSLA lifecycle events. Four bespoke extensions are required for this implementation (`MarkToMarketCollateralCall`, `RecallEvent`, `ManufacturedPaymentEvent`, `CollateralSubstitutionEvent`) — see [stock_borrow_loan.md](smart_contracts/stock_borrow_loan.md) §CDM Extensions. The ISLA CDM Working Group is actively developing the remaining coverage; extensions should be reviewed against future CDM releases as they are merged.
+CDM v5 covers approximately two-thirds of GMSLA lifecycle events. Four bespoke extensions are required for this implementation (`MarkToMarketCollateralCall`, `RecallEvent`, `ManufacturedPaymentEvent`, `CollateralSubstitutionEvent`) — see [stock_borrow_loan_wip.md](smart_contracts/stock_borrow_loan_wip.md) §CDM Extensions. The ISLA CDM Working Group is actively developing the remaining coverage; extensions should be reviewed against future CDM releases as they are merged.
 
 ### 3. Core Invariants — All Verified Compliant
 

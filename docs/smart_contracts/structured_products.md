@@ -39,7 +39,7 @@ The product state for a structured note is the payoff specification. Payoffs may
 
 For the canonical Reverse Convertible, the `payoff` decomposes into:
 
-- A **bond component** specifying the coupon schedule, accrual basis, and principal repayment terms (governed by [bonds.md](bonds.md)).
+- A **bond component** specifying the coupon schedule, accrual basis, and principal repayment terms (governed by [bonds_wip.md](bonds_wip.md)).
 - A **knock-in put option component** specifying the strike, barrier level, observation schedule, and physical-settlement ratio (governed by [equity_options.md](equity_options.md)).
 - A **redemption rule** combining the two: at maturity, deliver cash at par if the put is out of the money (or never knocked in); else deliver shares at the physical settlement ratio.
 
@@ -184,13 +184,13 @@ CDM `TradeState` does not natively express a compound liveliness + last-event ma
 
 ## Relationship to Other Smart Contracts
 
-| Smart Contract  | Relationship                                                                                                                                       |
-|-----------------|----------------------------------------------------------------------------------------------------------------------------------------------------|
-| Bonds           | The bond payoff component is governed by [bonds.md](bonds.md): coupon schedule, accrual, principal repayment                                        |
-| Equity Options  | The option payoff component is governed by [equity_options.md](equity_options.md): barrier monitoring, knock-in observation, physical settlement   |
-| Equities        | Equity delivery at maturity (4b) is a share transfer following [equities.md](equities.md)                                                          |
-| Cash Payments   | Coupon and cash redemption distributions follow [cash_payments.md](cash_payments.md)                                                                |
-| QIS             | A QIS composite unit may serve as the reference underlying of the embedded option; the lifecycle is unchanged                                      |
+| Smart Contract | Relationship                                                                                                                                     |
+|----------------|--------------------------------------------------------------------------------------------------------------------------------------------------|
+| Bonds          | The bond payoff component is governed by [bonds_wip.md](bonds_wip.md): coupon schedule, accrual, principal repayment                             |
+| Equity Options | The option payoff component is governed by [equity_options.md](equity_options.md): barrier monitoring, knock-in observation, physical settlement |
+| Equities       | Equity delivery at maturity (4b) is a share transfer following [equities.md](equities.md)                                                        |
+| Cash Payments  | Coupon and cash redemption distributions follow [cash_payments.md](cash_payments.md)                                                             |
+| QIS            | A QIS composite unit may serve as the reference underlying of the embedded option; the lifecycle is unchanged                                    |
 
 ---
 

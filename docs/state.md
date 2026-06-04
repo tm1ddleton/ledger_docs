@@ -228,19 +228,19 @@ The futures cost basis is the canonical example: a delivery-settled product need
 
 ### Per-Contract Summary
 
-| Smart contract                                                  | Position-state extension | Unit-state flags                                  | Notes                                                                                            |
-|-----------------------------------------------------------------|--------------------------|---------------------------------------------------|--------------------------------------------------------------------------------------------------|
-| [Cash equities](smart_contracts/equities.md)                    | —                        | —                                                 | T+1 standard cycle in most markets. Dividend eligibility uses the `Settled` bucket on record date. |
-| [Futures](smart_contracts/futures.md)                           | `costBasis`              | —                                                 | Unit moves written `Settled` at execution; bucketed counters collapse to a single `Settled` total. |
-| [Bonds](smart_contracts/bonds.md)                               | —                        | —                                                 | T+2 standard cycle; failure resolution paths as for equities.                                    |
-| [Equity options](smart_contracts/equity_options.md)             | exercise sub-bucket      | `barrier_knocked`                                 | Per-position exercise state layered onto the settlement-bucket counters.                         |
-| [FX (spot, forward, swap, NDF)](smart_contracts/fx.md)          | —                        | —                                                 | Cycle length depends on value date; payment netting compresses the counter across counterparties. |
-| [IRS](smart_contracts/irs.md)                                   | —                        | —                                                 | Each periodic payment passes through the bucket cycle on its payment date.                       |
-| [Structured products](smart_contracts/structured_products.md)   | —                        | `barrier_knocked`, autocall flags                 | Per-coupon and final-redemption cash flows pass through the bucket cycle on their value dates.    |
-| [QIS](smart_contracts/qis.md)                                   | —                        | —                                                 | Simulated wallet movements are recorded but settle off-cycle per the strategy definition.        |
-| [Cash payments](smart_contracts/cash_payments.md)               | —                        | —                                                 | The `Expected → Pending → Instructed → Settled` flow (where tracked) drives the bucket transitions. |
-| [SBL](smart_contracts/stock_borrow_loan.md)                     | —                        | —                                                 | Collateral margin call and return cycle map onto bucket movements.                               |
-| [Funding](smart_contracts/funding.md)                           | —                        | —                                                 | Notional reset and IFR rate changes do not require an extension.                                 |
+| Smart contract                                                | Position-state extension | Unit-state flags                  | Notes                                                                                               |
+|---------------------------------------------------------------|--------------------------|-----------------------------------|-----------------------------------------------------------------------------------------------------|
+| [Cash equities](smart_contracts/equities.md)                  | —                        | —                                 | T+1 standard cycle in most markets. Dividend eligibility uses the `Settled` bucket on record date.  |
+| [Futures](smart_contracts/futures.md)                         | `costBasis`              | —                                 | Unit moves written `Settled` at execution; bucketed counters collapse to a single `Settled` total.  |
+| [Bonds](smart_contracts/bonds_wip.md)                         | —                        | —                                 | T+2 standard cycle; failure resolution paths as for equities.                                       |
+| [Equity options](smart_contracts/equity_options.md)           | exercise sub-bucket      | `barrier_knocked`                 | Per-position exercise state layered onto the settlement-bucket counters.                            |
+| [FX (spot, forward, swap, NDF)](smart_contracts/fx_wip.md)    | —                        | —                                 | Cycle length depends on value date; payment netting compresses the counter across counterparties.   |
+| [IRS](smart_contracts/irs_wip.md)                             | —                        | —                                 | Each periodic payment passes through the bucket cycle on its payment date.                          |
+| [Structured products](smart_contracts/structured_products.md) | —                        | `barrier_knocked`, autocall flags | Per-coupon and final-redemption cash flows pass through the bucket cycle on their value dates.      |
+| [QIS](smart_contracts/qis_wip.md)                             | —                        | —                                 | Simulated wallet movements are recorded but settle off-cycle per the strategy definition.           |
+| [Cash payments](smart_contracts/cash_payments.md)             | —                        | —                                 | The `Expected → Pending → Instructed → Settled` flow (where tracked) drives the bucket transitions. |
+| [SBL](smart_contracts/stock_borrow_loan_wip.md)               | —                        | —                                 | Collateral margin call and return cycle map onto bucket movements.                                  |
+| [Funding](smart_contracts/funding.md)                         | —                        | —                                 | Notional reset and IFR rate changes do not require an extension.                                    |
 
 Where a contract introduces a new margining mechanism (e.g. initial margin recorded on the ledger, or future VM extensions to cleared OTC contracts), the cost-basis pattern documented for futures is to be applied.
 

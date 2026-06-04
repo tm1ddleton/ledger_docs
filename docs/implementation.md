@@ -146,7 +146,7 @@ The three families above are the asset-servicing and time drivers. The smart con
 | `OperationalInstruction` | Exercise notice, assignment notice, recall notice, collateral substitution, novation/clearing instruction, early-termination notice.                                                                     |
 | `OverrideConfiguration`  | A pre-ex-date position-level corporate-action override from an upstream UI (see [CA Orchestration](invariants.md#override-timing)).                                                                      |
 
-These are projectable onto CDM where a qualification exists (e.g. `ClearingInstruction`, `Exercise`, `MarginCall`) and carry `†` where bespoke (e.g. `RecallEvent`, `CollateralSubstitutionEvent` — see [stock_borrow_loan.md](smart_contracts/stock_borrow_loan.md)).
+These are projectable onto CDM where a qualification exists (e.g. `ClearingInstruction`, `Exercise`, `MarginCall`) and carry `†` where bespoke (e.g. `RecallEvent`, `CollateralSubstitutionEvent` — see [stock_borrow_loan_wip.md](smart_contracts/stock_borrow_loan_wip.md)).
 
 ---
 
@@ -220,10 +220,10 @@ Each smart-contract document carries an `## Implementation` section that special
 | [Futures](smart_contracts/futures.md)                         | `DailySettlement`, `EDSP`, `SOQ`                        | No                                                          |
 | [Funding](smart_contracts/funding.md)                         | Portfolio MtM (`Close` set), desk cash balance          | `Loan` product per `(book, currency)`                       |
 | [Equity options](smart_contracts/equity_options.md)           | `ReferencePrice`, `BarrierLevel` (point + range)        | No (adjusts on CA)                                          |
-| [Bonds](smart_contracts/bonds.md)                             | RFR `Fixing` (point + compounded range)                 | Equity units (on convertible conversion)                    |
-| [FX](smart_contracts/fx.md)                                   | NDF `Fixing`                                            | No                                                          |
-| [IRS](smart_contracts/irs.md)                                 | RFR/IBOR `Fixing` (point + compounded range)            | Cleared trade (on novation)                                 |
-| [QIS](smart_contracts/qis.md)                                 | Constituent prices, `NAV`, `IndexLevel` (point + range) | Composite unit (on strategy inception)                      |
+| [Bonds](smart_contracts/bonds_wip.md)                         | RFR `Fixing` (point + compounded range)                 | Equity units (on convertible conversion)                    |
+| [FX](smart_contracts/fx_wip.md)                               | NDF `Fixing`                                            | No                                                          |
+| [IRS](smart_contracts/irs_wip.md)                             | RFR/IBOR `Fixing` (point + compounded range)            | Cleared trade (on novation)                                 |
+| [QIS](smart_contracts/qis_wip.md)                             | Constituent prices, `NAV`, `IndexLevel` (point + range) | Composite unit (on strategy inception)                      |
 | [Structured products](smart_contracts/structured_products.md) | `ReferencePrice`, `BarrierLevel`                        | Note unit (on creation); three products `†`                 |
 | [Cash payments](smart_contracts/cash_payments.md)             | — (date- and feed-driven)                               | No                                                          |
-| [SBL](smart_contracts/stock_borrow_loan.md)                   | `CollateralMark`, `DividendPerShare`                    | No                                                          |
+| [SBL](smart_contracts/stock_borrow_loan_wip.md)               | `CollateralMark`, `DividendPerShare`                    | No                                                          |

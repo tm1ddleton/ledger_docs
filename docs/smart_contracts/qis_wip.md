@@ -148,7 +148,7 @@ Two funding structures are supported:
 | Composite unit issuance | Composite Unit Issuance Pool | Investor / Desk Book | N composite units                       | `Instructed → Settled` |
 | Subscription cash       | Investor / Desk Book         | Cash Account         | Cash (N × NAV per unit at dealing date) | `Pending → Settled`    |
 
-**Unfunded**: the investor gains exposure without paying upfront capital (e.g. via a TRS or unfunded structured note). The composite unit is issued to the desk book as a hedge; the investor's obligation is governed by the overlying product smart contract (see [irs.md](irs.md), [structure_products.md](structure_products.md)). No subscription cash move is created at issuance. Settlement at termination is covered in §7.
+**Unfunded**: the investor gains exposure without paying upfront capital (e.g. via a TRS or unfunded structured note). The composite unit is issued to the desk book as a hedge; the investor's obligation is governed by the overlying product smart contract (see [irs_wip.md](irs_wip.md), [structured_products.md](structured_products.md)). No subscription cash move is created at issuance. Settlement at termination is covered in §7.
 
 | Move                    | From                         | To             | Asset             | State                  |
 |-------------------------|------------------------------|----------------|-------------------|------------------------|
@@ -355,12 +355,12 @@ For constituent-based indices, the divisor maintains index-level continuity acro
 
 ## Relationship to Other Smart Contracts
 
-| Product                          | Relationship                                                                                          |
-|----------------------------------|-------------------------------------------------------------------------------------------------------|
-| Total Return Swap (TRS) on QIS   | The TRS references composite units as the underlying; the TRS payer receives the total return on the composite unit. Coupon payments per [irs.md](irs.md). |
-| Structured note referencing QIS  | The note's redemption amount is linked to composite unit NAV at maturity; structured per [structure_products.md](structure_products.md) |
-| Equity futures on index          | The futures price references the constituent-based index level; futures lifecycle per [futures.md](futures.md) |
-| Cash dividend income             | Constituent dividends in Model A simulated wallets follow [cash_payments.md](cash_payments.md)        |
+| Product                         | Relationship                                                                                                                                                       |
+|---------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Total Return Swap (TRS) on QIS  | The TRS references composite units as the underlying; the TRS payer receives the total return on the composite unit. Coupon payments per [irs_wip.md](irs_wip.md). |
+| Structured note referencing QIS | The note's redemption amount is linked to composite unit NAV at maturity; structured per [structured_products.md](structured_products.md)                          |
+| Equity futures on index         | The futures price references the constituent-based index level; futures lifecycle per [futures.md](futures.md)                                                     |
+| Cash dividend income            | Constituent dividends in Model A simulated wallets follow [cash_payments.md](cash_payments.md)                                                                     |
 
 ---
 
