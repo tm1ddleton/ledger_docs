@@ -10,6 +10,63 @@ The model generalises to other structures — capital-protected notes, autocalla
 
 ---
 
+## Products in Scope
+
+The structured products in scope (Germany MVP) and their decompositions are listed below. Each note is a **package** of a bond component (governed by [bonds_wip.md](bonds_wip.md)) and one or more option components (governed by [equity_options.md](equity_options.md)); lifecycle events on the components surface to this contract via the QRL observation / event ladder. The template column is the QRL payoff template.
+
+> *Transcribed from the "Products in scope" page; the event matrix below should be confirmed against that page.*
+
+### Catalogue
+
+| Product                          | Decomposition                                                                                                                                     | Template                      |
+|----------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------|
+| Barrier Reverse Convertible      | Long bond + short barrier option (European exercise, continuous barrier monitoring)                                                               | `BarrierRevCon`               |
+| Barrier Reverse Convertible Pro  | Long bond + short barrier option (European exercise, discrete barrier monitoring)                                                                 | `BarrierRevConPro`            |
+| Bonus Certificate                | Zero bond + down-and-in put + plain vanilla call                                                                                                  | `BonusCertificate`            |
+| Capped Bonus Certificate         | Zero bond + down-and-in put (continuous monitoring, European exercise)                                                                            | `CappedBonusCertificate`      |
+| Capped Bonus Pro Certificate     | Zero bond + down-and-in put (discrete monitoring, European exercise)                                                                              | `CappedBonusCertificatePro`   |
+| Capped Warrant                   | Package of two vanilla options                                                                                                                    | `CappedWarrant`               |
+| Discount Certificate             | Long zero bond + short plain vanilla European put                                                                                                 | `DiscountCertificate`         |
+| Knock-Out Warrant                | Down/up-and-out call/put; continuous monitoring; European exercise; fixed expiry                                                                  | `BarrierOption`               |
+| Reverse Capped Bonus Certificate | Long zero bond + 1 vanilla call − 1 up-and-in barrier call (continuous monitoring, European exercise)                                             | `RevCappedBonusCertificate`   |
+| Reverse Convertible              | Long bond + short plain vanilla put                                                                                                               | `ReverseConvertible`          |
+| Option / Warrant (Plain Vanilla) | Plain vanilla European or American option on stock or equity index (HTUB or third-party issuer)                                                   | `Vanilla`                     |
+| Mini Certificate                 | Like Open End Turbo with barrier above/below strike for call/put; continuous barrier; intraday issuance                                           | `BarrierOption` (approx.)     |
+| Open End Turbo                   | Perpetual knock-out warrant (down-and-out / up-and-out), strike = barrier, exercisable for intrinsic value; continuous barrier; intraday issuance | `BarrierOption` (approx.)     |
+| Factor Certificate               | 1:1 tracker of a factor index (index calculation required)                                                                                        | TBD — on hold until clarified |
+
+### Lifecycle-event applicability
+
+`✅` = handled by the lifecycle engine (a QRL-driven lifecycle event this contract processes into moves/payments). `⚠` = impacts lifecycle events but is applied as a **change in product state** — a corporate action on the underlying that feeds through as an R-value / strike / multiplier adjustment via the [Corporate Action Orchestration](../invariants.md#corporate-action-orchestration) model, not as a direct cash move on the note.
+
+| Product                          | Expiry | Coupon | Cont. barrier | Disc. barrier | Exercise   | Dividend | Stock split |
+|----------------------------------|--------|--------|---------------|---------------|------------|----------|-------------|
+| Barrier Reverse Convertible      | ✅      | ✅      | ✅             | —             | European   | ⚠        | ⚠           |
+| Barrier Reverse Convertible Pro  | ✅      | ✅      | —             | ✅             | European   | ⚠        | ⚠           |
+| Bonus Certificate                | ✅      | —      | ✅             | —             | European   | ⚠        | ⚠           |
+| Capped Bonus Certificate         | ✅      | —      | ✅             | —             | European   | ⚠        | ⚠           |
+| Capped Bonus Pro Certificate     | ✅      | —      | —             | ✅             | European   | ⚠        | ⚠           |
+| Capped Warrant                   | ✅      | —      | —             | —             | European   | ⚠        | ⚠           |
+| Discount Certificate             | ✅      | —      | —             | —             | European   | ⚠        | ⚠           |
+| Knock-Out Warrant                | ✅      | —      | ✅             | —             | European   | ⚠        | ⚠           |
+| Reverse Capped Bonus Certificate | ✅      | —      | ✅             | —             | European   | ⚠        | ⚠           |
+| Reverse Convertible              | ✅      | ✅      | —             | —             | European   | ⚠        | ⚠           |
+| Option / Warrant (Plain Vanilla) | ✅      | —      | —             | —             | Euro/Amer  | ⚠        | ⚠           |
+| Mini Certificate                 | ✅      | —      | ✅             | —             | —          | ⚠        | ⚠           |
+| Open End Turbo                   | perp.  | —      | ✅             | —             | continuous | ⚠        | ⚠           |
+| Factor Certificate               | —      | —      | —             | —             | —          | —        | —           |
+
+**Scope notes:**
+
+- **Coupon** applies only to the coupon-bearing reverse convertibles; the certificates are built on **zero** bonds and pay no periodic coupon (their return is delivered at redemption).
+- **Continuous vs discrete barrier** distinguishes continuous (intraday) monitoring from discrete observation-date monitoring — the same distinction as the `barrier.monitoring` field in [equity_options.md](equity_options.md). The "Pro" variants use discrete monitoring.
+- **Dividend and stock split are `⚠`** for every equity-underlying note: they are not note-level cash events but corporate actions that re-strike / re-size the embedded option via product state. This is exactly the inbound `CorporateAction` → outbound `ProductStateChange` path in [implementation.md](../implementation.md).
+- **Mini Certificate / Open End Turbo** are modelled as a `BarrierOption` approximation and require the barrier monitor to handle **intraday issuance**; the Open End Turbo is **perpetual** (no scheduled expiry — it terminates on knock-out).
+- **Factor Certificate** is on hold pending the factor-index calculation and is not yet modelled.
+- **Hedging instruments** referenced on the same scope page — stock, futures, barrier options, IR futures/options, FX cash/option/swap, and SBL — are not structured products; they are governed by their own contracts ([equities.md](equities.md), [futures.md](futures.md), [equity_options.md](equity_options.md), [irs_wip.md](irs_wip.md), [fx_wip.md](fx_wip.md), [stock_borrow_loan_wip.md](stock_borrow_loan_wip.md)).
+
+---
+
 ## Booking Model
 
 Per [invariant 11](../invariants.md#core-ledger-invariants), the booking model is not the responsibility of the smart contract. For the canonical example we assume the simplest case: the note is booked as a single entity on a single internal wallet, and any hedge instruments are also held on that same wallet. Whether a real implementation splits issuance from hedging, routes through an SPV, or distributes through a primary syndicate is a booking decision and does not change the smart contract's lifecycle behaviour.
