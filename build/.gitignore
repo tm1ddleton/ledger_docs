@@ -1,0 +1,5 @@
+# Generated documentation bundles (regenerate with the scripts in this dir)
+ledger_docs.html
+ledger_docs.epub
+ledger_docs.pdf
+__pycache__/
