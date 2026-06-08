@@ -22,6 +22,36 @@ Product state and Unit state are the parameter values and lifecycle indicators o
 
 ---
 
+## Product Registry
+
+Products are **pre-existing templated entities**, not artefacts created by the first trade that references them. A futures contract month is listed by the exchange before anyone trades it; an OTC option's terms are agreed and registered before the position is booked. The registry is the canonical store of those templates.
+
+Each registry entry is keyed by `(productId, version)` and lives at the **payout layer** — it holds the terms (the contract logic) and the bound parameter values (the [Product State](#product-state)) for one version of one product. **Trades and units reference the product; the product never references the trade.** This inversion is what lets many trades share one set of terms by construction (see [Position State](#position-state) and the position key).
+
+| Registry field        | Description                                                                                                          |
+|------------------------|----------------------------------------------------------------------------------------------------------------------|
+| `productId`            | Stable identifier for the product across all its versions.                                                            |
+| `version`              | Monotonic version number; a new version is a new registry entry, the prior version remains queryable.                |
+| `listing`              | Listed-vs-OTC and venue metadata (exchange, CCP, ISIN where applicable). **Metadata on the entry, not a structural fork at the payout layer.** |
+| `lifecyclingGrain`     | `trade` or `position` — the grain at which this product is lifecycled (see [Lifecycling Grain](#lifecycling-grain)). |
+| `capabilities`         | Declared optional features that gate lifecycle behaviour — e.g. a barrier (`{ kind: KI/KO, ... }`), an autocall ladder, a call/put schedule. The *capability* is template metadata; the *occurrence* of a contingent event (e.g. `barrier_knocked`) is runtime [Unit State](#unit-state). |
+| `productState`         | The bound parameter values for this version (see [Product State](#product-state)).                                   |
+
+Listed-vs-OTC is metadata on the registry entry, not a structural fork of the payoff template: the same option payoff is the same template whether it clears at a CCP or faces a bilateral counterparty. The booking topology *does* legitimately differ by listing — exchange-traded products use the two-leg [Exchange Trade Booking Model](invariants.md#exchange-trade-booking-model); OTC products book directly against the counterparty wallet — but that is a property of the settlement and wallet layer, not of the product template.
+
+### Lifecycling Grain
+
+A product is lifecycled at one of two grains, declared on its registry entry:
+
+| Grain      | Applies to                                                                  | Mechanism                                                                                                                                            |
+|------------|-----------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------|
+| `position` | Fungible / listed products where one product version is shared across many trades (cash equities, futures, cleared IRS). | Lifecycle events service the **position** keyed by `(product version, internal wallet, counterparty wallet)`. Per-trade CDM events are produced by [down-allocation](events.md#projection-and-down-allocation) only at the interop boundary. |
+| `trade`    | Bespoke OTC products where the product version is unique per trade (OTC options, bilateral structured notes). | Lifecycle events apply per trade. Because the product version is unique per trade, `position == trade` by construction, and no down-allocation is needed. |
+
+Grain is a **consequence of fungibility**, surfaced as an explicit flag rather than inferred. The two cases meet at the boundary: a `trade`-grained product is simply the degenerate case of a `position`-grained one in which every position contains exactly one trade. This is also why the position key in [Position State](#position-state) is consistent across both — for a `trade`-grained product the `product version` component of the key is unique per trade, so the position cannot aggregate more than one.
+
+---
+
 ## Product State
 
 A smart contract's **terms** are encoded in the contract logic itself: a futures contract has *some* expiry date, *some* multiplier, *some* CCP; a barrier option has *some* knock-in barrier. **Product state** is the set of concrete parameter values bound to those terms for a specific instance.
@@ -34,7 +64,9 @@ A smart contract's **terms** are encoded in the contract logic itself: a futures
 | Structured note       | Full term sheet: principal, observation schedule, payoff function, autocall barriers, coupon mechanics.                                       |
 | OTC IRS               | Notional, fixed/floating leg conventions, day-count, fixing schedule, payment dates, calculation agent.                                       |
 
-Product state is versioned and stored bi-temporally, so the product as bound at any historical time is recoverable. It changes through two routes only: (a) a **corporate action** that revises the product terms — for example a stock split that changes the strike or multiplier of an option — appended to the unit's corporate-actions-applied list (see [Corporate Actions Applied](#corporate-actions-applied)); and (b) **correction of a misbooking**, applied via the cancel-and-correct amendment pattern (see [invariant 7](invariants.md#core-ledger-invariants)). In both cases a new version is written; the prior version remains queryable.
+Product state is versioned and stored bi-temporally as a [registry](#product-registry) entry `(productId, version)`, so the product as bound at any historical time is recoverable. It changes through two routes only: (a) a **corporate action** that revises the product terms — for example a stock split that changes the strike or multiplier of an option — appended to the unit's corporate-actions-applied list (see [Corporate Actions Applied](#corporate-actions-applied)); and (b) **correction of a misbooking**, applied via the cancel-and-correct amendment pattern (see [invariant 7](invariants.md#core-ledger-invariants)). In both cases a new version is written; the prior version remains queryable.
+
+When a corporate action revises the terms of a **fungible** underlying — one whose product version is shared across many positions — the new version is applied **in place and atomically across every subscribed position** within a single ledger transaction (see [invariant 12](invariants.md#core-ledger-invariants) and the [Corporate Action Orchestration](invariants.md#corporate-action-orchestration) model). The unit identifier is stable through the action; positions are not re-bucketed. This is deliberate: re-bucketing a fungible position across a version boundary would strand per-position state that has no natural migration rule — the futures `costBasis`, open `Pending(date)` settlement sub-buckets, and option exercise sub-buckets all attach to the position, not to the version. In-place atomic application reaches the same observable end state without that migration, while the prior version remains queryable for audit.
 
 ---
 
@@ -68,7 +100,7 @@ The marker records the most recent lifecycle event applied to the unit — e.g. 
 
 Lifecycle events are generated from QRL with some augmentation from QRLPM (e.g. QRL 'Termination' maps to 'Matured' in QRLPM and once QRLPM has completed the final payments QRLPM will move the state to 'Expired'.  Lifecycle events generated by QRL are produced in a defined order, and once applied do not change, so only the last lifecycle event need be retained. The full history is recoverable from the ledger by walking back through the chain of lifecycle-event transactions on the unit, each of which references its predecessor.
 
-*TBD* : behaviour in the case of a corporate action sufficiently significant that the LifeCycleEvent ladder changes.  Maybe for this scenario we need to record all events: or on ProductChanged return the new events and check these against those previously actioned. 
+**Corporate action that changes the lifecycle ladder.** A corporate action may be significant enough to change the QRL event ladder itself — e.g. a merger that re-dates the coupon schedule, or a restructuring that adds or removes observation dates. This is handled within the existing version mechanism rather than by a special case: applying the corporate action writes a **new product version** (per [Product State](#product-state)) whose terms generate a new ladder. On application the smart contract re-derives the ladder from the new version and reconciles it against the events already actioned on the prior version (recoverable by walking the ledger): events that survive unchanged keep their marker; events that are dropped are recorded as cancelled; newly-introduced future events are scheduled as `Expected`. The single last-lifecycle-event marker remains sufficient for idempotency because it is always interpreted relative to the current product version — a re-fed event carrying the prior version's ladder identity does not match the new version's ladder and is therefore correctly treated as superseded rather than replayed. No separate full-event-history component is required on unit state; the history is, as before, recoverable from the ledger.
 
 Example markers:
 
