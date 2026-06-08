@@ -459,3 +459,27 @@ In the event of issuer default:
 4. **Coupon schedule as ledger moves**: CDM models the coupon schedule within `InterestRatePayout` as contract terms (`FixedCoupon` or `FloatingCoupon` under the payout), not as individual ledger transfers. This ledger deviates by materialising each scheduled coupon as a discrete `Expected` move at inception, to provide forward visibility in the live balance. The contractual schedule (QRL output) and the ledger schedule should always be consistent; any discrepancy is an error.
 
 CDM reference: [Event Model](https://cdm.finos.org/docs/event-model/) · [Process Model](https://cdm.finos.org/docs/process-model/) · [FINOS CDM GitHub](https://github.com/finos/common-domain-model)
+
+---
+
+## Implementation
+
+This section binds the bonds contract to the [External Message Interface](../implementation.md).
+
+### Inbound
+
+| Family                   | Concrete message(s)                                                                                                                  | Window        | Triggers                                                        |
+|--------------------------|--------------------------------------------------------------------------------------------------------------------------------------|---------------|-----------------------------------------------------------------|
+| `MarketObservation`      | `Fixing` — reference rate (`SOFR`, `€STR`, `EURIBOR`) for a single calculation period (FRNs)                                         | Point (date)  | Crystallises the amount on the existing `Expected` coupon move. |
+| `MarketObservation`      | `Fixing` (compounded) — RFR compounded-in-arrears over the interest period                                                           | Range (dates) | Floating coupon amount where the period is set in arrears.      |
+| `DateEvent`              | `ScheduledDate` — coupon date, fixing date, maturity, call/put exercise window, settlement-date arrival (T+1 / T+2)                  | —             | Coupon/redemption flow; fixing; optimistic settle.              |
+| `CorporateAction`        | `EarlyRedemption` (issuer call / holder put); `BespokeEvent`                                                                         | —             | Early-redemption transaction; `Active → Matured`.               |
+| `OperationalInstruction` | CSD pre-advice (`camt.054`); CSD account statement (`camt.053`); DvP settlement confirmed/failed; buy-in; CSD redemption instruction | —             | Position-state bucket transitions; redemption booking.          |
+
+### Outbound
+
+| Family               | Concrete message(s)                                                                                                                    | CDM projection                                        |
+|----------------------|----------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------|
+| `Payment`            | Coupon cash; principal repayment; early-redemption cash (call/put); fractional cash on conversion; accrued interest within dirty price | `InterestPayment` / `CashTransfer`                    |
+| `ProductStateChange` | Fixing crystallised on `Expected` move; `Active → Matured → Terminated`; conversion extinguishes bond / creates equity                 | `Reset` / `ContractTermination` / `ConversionFeature` |
+| `NewProductTemplate` | Equity units on convertible-bond conversion (face value × conversion ratio)                                                            | `Execution`                                           |

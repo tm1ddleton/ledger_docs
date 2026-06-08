@@ -10,13 +10,13 @@ The result is that the desk's cash balance attributable to funded positions is a
 
 This is the funded-assets analogue of variation margin on derivatives. The difference is:
 
-| Feature                         | Variation margin (derivatives)             | Internal funding (cash assets)              |
-|---------------------------------|--------------------------------------------|---------------------------------------------|
-| Scope                           | Daily MtM change only                      | Full MtM (initial cost + daily change)      |
-| First cash flow                 | None at inception                          | Funding advance at asset acquisition        |
-| Subsequent cash flows           | Daily delta (VM call/return)               | Daily delta (revaluation advance/repayment) |
-| Interest on cash balance        | Charged at IFR; swept into funding at reset | Charged on running funded notional at IFR   |
-| Governed by                     | Derivative smart contract (e.g. irs.md)    | This contract (IFR charging)                |
+| Feature                  | Variation margin (derivatives)              | Internal funding (cash assets)              |
+|--------------------------|---------------------------------------------|---------------------------------------------|
+| Scope                    | Daily MtM change only                       | Full MtM (initial cost + daily change)      |
+| First cash flow          | None at inception                           | Funding advance at asset acquisition        |
+| Subsequent cash flows    | Daily delta (VM call/return)                | Daily delta (revaluation advance/repayment) |
+| Interest on cash balance | Charged at IFR; swept into funding at reset | Charged on running funded notional at IFR   |
+| Governed by              | Derivative smart contract (e.g. irs_wip.md) | This contract (IFR charging)                |
 
 ---
 
@@ -29,7 +29,7 @@ This is the funded-assets analogue of variation margin on derivatives. The diffe
 - External repos, securities lending, or prime brokerage arrangements — these are separate legal agreements
 - Variation margin flows themselves — governed by the relevant derivative smart contract; only the resulting net cash balance in the desk book is in scope here for IFR charging
 - FVA (funding valuation adjustment) for OTC derivatives — a pricing adjustment, not a ledger position
-- FX forward points and cross-currency basis — any cross-currency component of funding is achieved via an FX transaction governed by [fx.md](fx.md); this contract handles single-currency funding only
+- FX forward points and cross-currency basis — any cross-currency component of funding is achieved via an FX transaction governed by [fx_wip.md](fx_wip.md); this contract handles single-currency funding only
 
 ---
 
@@ -78,7 +78,7 @@ Set per legal entity — all books in the same entity share the same schedule. C
 
 ### 1. Funding Inception — Asset Acquisition
 
-**Trigger**: A non-cash asset settles into the desk's asset book. The asset smart contract governs the asset acquisition itself (see [equities.md](equities.md), [bonds.md](bonds.md), etc.). This smart contract governs the concurrent funding advance.
+**Trigger**: A non-cash asset settles into the desk's asset book. The asset smart contract governs the asset acquisition itself (see [equities.md](equities.md), [bonds_wip.md](bonds_wip.md), etc.). This smart contract governs the concurrent funding advance.
 
 **Timing**: The funding advance is aligned to asset settlement date. Before settlement, the funding commitment is `Pending`; it becomes `Settled` on the same value date as the asset move.
 
@@ -232,7 +232,7 @@ Non-cash assets and cash flows are grouped by currency. Each currency group is m
 - Separate `TradeState` per (book, currency)
 - Separate IFR per currency
 - Revaluation events across all currency groups occur on the same entity-level schedule but are computed independently
-- Any FX translation risk between a funding currency and the book's reporting currency is a separate FX exposure managed via [fx.md](fx.md)
+- Any FX translation risk between a funding currency and the book's reporting currency is a separate FX exposure managed via [fx_wip.md](fx_wip.md)
 
 ---
 
@@ -299,14 +299,14 @@ CDM has no business event qualification for a rate change on an existing loan (i
 
 ## Relationship to Other Smart Contracts
 
-| Smart Contract     | Relationship                                                                                                                          |
-|--------------------|---------------------------------------------------------------------------------------------------------------------------------------|
-| Equities           | Equity settlement triggers funding inception (§1) and partial release (§4). Ex-date dividend receipts are in [cash_payments.md](cash_payments.md) and do not directly affect funding notional until the next revaluation |
-| Bonds              | Bond settlement triggers funding inception and partial release. Coupon cash receipts credit the desk's cash book; their effect on the funding notional is captured at the next revaluation |
-| QIS                | Funded composite unit subscription triggers funding inception. NAV changes between subscriptions and redemptions drive revaluation advances and repayments |
-| FX                 | Cross-currency asset positions are funded in their asset currency. Any residual FX exposure from the difference between the asset currency and the book's reporting currency is managed via an FX transaction in [fx.md](fx.md), not by this contract |
-| IRS / Derivatives  | Unfunded. Initial margin is out of scope for this contract. Variation margin flows governed by the derivative smart contract settle into the desk's cash book and are swept into the funding facility at each revaluation, with the net VM balance funded at IFR |
-| Equity Options     | OTC option premium paid upfront creates a funded position at premium settlement. Initial margin for listed options is out of scope for this contract                              |
+| Smart Contract    | Relationship                                                                                                                                                                                                                                                     |
+|-------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Equities          | Equity settlement triggers funding inception (§1) and partial release (§4). Ex-date dividend receipts are in [cash_payments.md](cash_payments.md) and do not directly affect funding notional until the next revaluation                                         |
+| Bonds             | Bond settlement triggers funding inception and partial release. Coupon cash receipts credit the desk's cash book; their effect on the funding notional is captured at the next revaluation                                                                       |
+| QIS               | Funded composite unit subscription triggers funding inception. NAV changes between subscriptions and redemptions drive revaluation advances and repayments                                                                                                       |
+| FX                | Cross-currency asset positions are funded in their asset currency. Any residual FX exposure from the difference between the asset currency and the book's reporting currency is managed via an FX transaction in [fx_wip.md](fx_wip.md), not by this contract    |
+| IRS / Derivatives | Unfunded. Initial margin is out of scope for this contract. Variation margin flows governed by the derivative smart contract settle into the desk's cash book and are swept into the funding facility at each revaluation, with the net VM balance funded at IFR |
+| Equity Options    | OTC option premium paid upfront creates a funded position at premium settlement. Initial margin for listed options is out of scope for this contract                                                                                                             |
 
 ---
 
@@ -320,3 +320,28 @@ CDM has no business event qualification for a rate change on an existing loan (i
 | Revaluation advance or repayment fails                | Two-tier model as above. Outstanding delta is carried as an `Instructed` move until settled; it does not affect the notional reset, which has already occurred as a state event |
 | Book closed with outstanding funding position          | Funding must be terminated before book closure. Any residual notional is force-repaid via a `Pending` move flagged for operations review. Outstanding accrued interest is included in the final settlement |
 | Partial sale price differs materially from reset MtM  | The cash flow mismatch (sale price minus last reset MtM of sold position) is an intraday MtM exposure. It is automatically corrected at the next revaluation event and does not require manual intervention |
+
+---
+
+## Implementation
+
+This section binds the internal-funding contract to the [External Message Interface](../implementation.md).
+
+### Inbound
+
+| Family                   | Concrete message(s)                                                         | Window          | Triggers                                                  |
+|--------------------------|-----------------------------------------------------------------------------|-----------------|-----------------------------------------------------------|
+| `MarketObservation`      | Portfolio end-of-day MtM prices (`Close` set, one per funded asset)         | Point (date) ×N | Notional reset / revaluation event.                       |
+| `MarketObservation`      | Desk net cash balance (derived since last reset: VM, dividends, coupons)    | Point (date)    | Incorporated into the revaluation computation.            |
+| `DateEvent`              | `ScheduledDate` — revaluation date, interest payment date, termination date | —               | Notional reset; interest settlement; book wind-down.      |
+| `OperationalInstruction` | Asset settlement notification; asset disposal notification; IFR publication | —               | Funding inception; partial release; `IFRUpdateEvent` `†`. |
+
+Corporate actions are not consumed directly; dividends and coupons on funded equities settle into the desk cash balance, which the revaluation computation observes.
+
+### Outbound
+
+| Family               | Concrete message(s)                                                                                                             | CDM projection                                         |
+|----------------------|---------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------|
+| `Payment`            | Funding advance; revaluation advance/repayment; interest payment; partial repayment; final repayment + accrued interest         | `Transfer` / `InterestPayment`                         |
+| `ProductStateChange` | `Loan.notionalSchedule` reset (`QuantityChangePrimitive`); IFR rate change (state event); `TradeState → ClosedState.Terminated` | `Reset` / `IFRUpdateEvent` `†` / `ContractTermination` |
+| `NewProductTemplate` | `Loan` product per `(book, currency)` — open-term, variable-principal `MtMLinkedLoan`                                           | `Execution`                                            |

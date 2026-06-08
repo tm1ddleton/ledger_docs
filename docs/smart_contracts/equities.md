@@ -219,3 +219,30 @@ The rights smart contract lifecycle will be documented separately.
 **Impact on derivative positions**: Option holders do not receive the subscription rights directly. Instead, listed option contracts are adjusted by the exchange or clearing house, and OTC contracts by the calculation agent, so that economic value is approximately preserved after the dilution on the ex-rights date. The adjustment may take the form of a revised strike, a changed deliverable, a changed contract multiplier, or a combination; it is event-specific and determined per the clearing house or calculation agent notice. See [equity_options.md](equity_options.md).
 
 Remaining corporate action types (Delisting, StockNameChange, StockIdentifierChange, BonusIssue, ClassAction, EarlyRedemption, Liquidation, BankruptcyOrInsolvency, IssuerNationalization, Relisting, BespokeEvent) will be specified as each type is implemented. The CDM does not yet provide complete lifecycle coverage for all the above types; deviations will be noted per type.
+
+---
+
+## Implementation
+
+This section binds the cash-equities contract to the [External Message Interface](../implementation.md). It lists the concrete inbound messages the contract subscribes to and the outbound messages it emits.
+
+### Inbound
+
+| Family                  | Concrete message(s)                                                               | Window       | Triggers                                                                                                   |
+|-------------------------|-----------------------------------------------------------------------------------|--------------|------------------------------------------------------------------------------------------------------------|
+| `MarketObservation`     | `Close` — official closing price of the listing                                   | Point (date) | Valuation / live-balance marking; not itself a lifecycle trigger.                                          |
+| `DateEvent`             | `ScheduledDate` — value-date arrival; dividend ex-date, record date, payment date | —            | Optimistic `Pending(value-date) → Settled`; dividend booking.                                              |
+| `CorporateAction`       | Full `CorporateActionTypeEnum` set (see Corporate Actions above)                  | —            | Orchestrated application across subscribed positions ([inv. 12](../invariants.md#core-ledger-invariants)). |
+| `TradeNotification`     | Exchange fill or reported/negotiated trade                                        | —            | Two-leg execution transaction; quantity into `Pending(T+1)`.                                               |
+| `SettlementFeedback`    | DvP confirmed / failed / bilateral cancellation / buy-in trigger                  | —            | Position-state bucket transition.                                                                          |
+| `OverrideConfiguration` | Pre-ex-date position-level CA override                                            | —            | Stored against `(position, ISIN, ex-date, action-type)`.                                                   |
+
+### Outbound
+
+| Family               | Concrete message(s)                                                                                            | CDM projection                                     |
+|----------------------|----------------------------------------------------------------------------------------------------------------|----------------------------------------------------|
+| `Payment`            | Dividend cash (gross/net per withholding); buy-in cash compensation                                            | `CashDividend` / `CashTransfer`                    |
+| `ProductStateChange` | Position-state bucket transitions; CA applied (product-state version bump, R-value propagation to derivatives) | `TransferStatusEnum` vocabulary; `StockSplit` etc. |
+| `NewProductTemplate` | Rights instrument (on `RightsIssue`); basket constituents (on `SpinOff` / `Merger` / `Takeover`)               | `Execution` / `Transfer`                           |
+
+Ordinary equity trades create no new product template — they open positions in an existing listing. Templates are emitted only where a corporate action brings a new instrument into existence.

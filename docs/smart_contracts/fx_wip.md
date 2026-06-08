@@ -185,7 +185,7 @@ NDFs are used where the non-deliverable currency is subject to capital controls 
 | `Matured`     | Settlement date reached; extinguishment and cash settlement transaction created; moves are in progress but not yet fully settled           |
 | `Terminated`  | NDF unit extinguished and cash settlement move has reached `Settled` (or zero-settlement extinguishment has settled); all obligations discharged |
 
-CDM `closedState` is set only on the transition to `Terminated`. The `Matured` state is carried as a bespoke field on `TradeState` without setting `closedState` (see [equity_options.md](equity_options.md) CDM Extension 3 for the general `Matured` state pattern).
+CDM `closedState` is set at the `Matured` trigger: the NDF becomes `Closed` (`positionState = Closed`, `closedState.state = Terminated`, `activityDate =` the settlement date) when the extinguishment and cash-settlement transaction is created. `Matured → Terminated` is therefore **not** a CDM state transition — both liveliness values project to the same `closedState`, differing only in whether the final transfers have settled; the residual settlement tail is carried on the transfers' own `TransferStatusEnum` and on `ClosedState.lastPaymentDate`. See [Projection to CDM State](../state.md#projection-to-cdm-state).
 
 ### 1. Trade Execution (T+0)
 
@@ -374,24 +374,24 @@ QRL outputs are consumed by the smart contract at execution and stored as part o
 
 ## CDM Event Representation
 
-| Lifecycle Event | CDM Business Event Qualification | CDM Transfer State | Notes |
-|---|---|---|---|
-| FX Spot / Forward execution | `EventQualificationEnum.Execution` | `TransferStatusEnum.Pending` | Smart contract creates the transaction with both currency moves; CDM product type `ForeignExchange` |
-| FX Swap execution | `EventQualificationEnum.Execution` | `TransferStatusEnum.Pending` | Two transactions created (near and far legs); linked by common smart contract reference |
-| Settlement instruction generated | — (state transition only) | `TransferStatusEnum.Instructed` | Applies to both moves in the transaction |
-| CLS settlement confirmed | — (state transition only) | `TransferStatusEnum.Settled` | Both legs transition simultaneously |
-| Bilateral settlement confirmed | — (state transition only) | `TransferStatusEnum.Settled` | Each leg may transition independently as confirmations arrive |
-| Settlement attempt failed (non-terminal) | — (state transition only) | `TransferStatusEnum.Pending` | Obligation persists; retry required |
-| Trade cancelled pre-settlement | — (state transition only) | `TransferStatusEnum.Failed` | Terminal; no reversal transaction |
-| Settled trade reversed (unwind) | `EventQualificationEnum.Execution` | `TransferStatusEnum.Settled` | Reversal transaction per invariant 6; moves written directly as `Settled` |
-| NDF execution — position created | `EventQualificationEnum.Execution` | `TransferStatusEnum.Instructed` | NDF unit move from counterparty to FX Desk Book; transitions to `Settled` on confirmation |
-| NDF fixing observed | `EventQualificationEnum.Reset` | — | CDM `Observation` primitive; reference rate recorded; settlement amount calculated; no new moves |
-| NDF maturity — unit extinguished + cash created | `EventQualificationEnum.ContractTermination` | `TransferStatusEnum.Pending` | Two-move transaction: NDF unit returned to counterparty; net cash move in settlement currency; NDF state: `Active → Matured` |
-| NDF maturity — cash settled | — (state transition only) | `TransferStatusEnum.Settled` | Both moves settle via correspondent bank; NDF state: `Matured → Terminated`; CDM `closedState` set at termination |
-| Netting: gross moves cancelled | — (state transition only) | `TransferStatusEnum.Failed` | Terminal; balance auto-corrected; no reversal |
-| Netting: net move created | — | `TransferStatusEnum.Pending` | Single net amount per currency per counterparty per value date |
-| Early termination (pre-settlement) | — (state transition only) | `TransferStatusEnum.Failed` | Terminal; no reversal transaction |
-| Early termination (post-settlement) | `EventQualificationEnum.Execution` | `TransferStatusEnum.Settled` | Reversal transaction per invariant 6 |
+| Lifecycle Event                                 | CDM Business Event Qualification             | CDM Transfer State              | Notes                                                                                                                                                                                  |
+|-------------------------------------------------|----------------------------------------------|---------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| FX Spot / Forward execution                     | `EventQualificationEnum.Execution`           | `TransferStatusEnum.Pending`    | Smart contract creates the transaction with both currency moves; CDM product type `ForeignExchange`                                                                                    |
+| FX Swap execution                               | `EventQualificationEnum.Execution`           | `TransferStatusEnum.Pending`    | Two transactions created (near and far legs); linked by common smart contract reference                                                                                                |
+| Settlement instruction generated                | — (state transition only)                    | `TransferStatusEnum.Instructed` | Applies to both moves in the transaction                                                                                                                                               |
+| CLS settlement confirmed                        | — (state transition only)                    | `TransferStatusEnum.Settled`    | Both legs transition simultaneously                                                                                                                                                    |
+| Bilateral settlement confirmed                  | — (state transition only)                    | `TransferStatusEnum.Settled`    | Each leg may transition independently as confirmations arrive                                                                                                                          |
+| Settlement attempt failed (non-terminal)        | — (state transition only)                    | `TransferStatusEnum.Pending`    | Obligation persists; retry required                                                                                                                                                    |
+| Trade cancelled pre-settlement                  | — (state transition only)                    | `TransferStatusEnum.Failed`     | Terminal; no reversal transaction                                                                                                                                                      |
+| Settled trade reversed (unwind)                 | `EventQualificationEnum.Execution`           | `TransferStatusEnum.Settled`    | Reversal transaction per invariant 6; moves written directly as `Settled`                                                                                                              |
+| NDF execution — position created                | `EventQualificationEnum.Execution`           | `TransferStatusEnum.Instructed` | NDF unit move from counterparty to FX Desk Book; transitions to `Settled` on confirmation                                                                                              |
+| NDF fixing observed                             | `EventQualificationEnum.Reset`               | —                               | CDM `Observation` primitive; reference rate recorded; settlement amount calculated; no new moves                                                                                       |
+| NDF maturity — unit extinguished + cash created | `EventQualificationEnum.ContractTermination` | `TransferStatusEnum.Pending`    | Two-move transaction: NDF unit returned to counterparty; net cash move in settlement currency; NDF state: `Active → Matured`; CDM `closedState.state = Terminated` set at this trigger |
+| NDF maturity — cash settled                     | — (state transition only)                    | `TransferStatusEnum.Settled`    | Both moves settle via correspondent bank; NDF state: `Matured → Terminated`; final transfers `Settled` and `ClosedState.lastPaymentDate` reached (no new `closedState` transition)     |
+| Netting: gross moves cancelled                  | — (state transition only)                    | `TransferStatusEnum.Failed`     | Terminal; balance auto-corrected; no reversal                                                                                                                                          |
+| Netting: net move created                       | —                                            | `TransferStatusEnum.Pending`    | Single net amount per currency per counterparty per value date                                                                                                                         |
+| Early termination (pre-settlement)              | — (state transition only)                    | `TransferStatusEnum.Failed`     | Terminal; no reversal transaction                                                                                                                                                      |
+| Early termination (post-settlement)             | `EventQualificationEnum.Execution`           | `TransferStatusEnum.Settled`    | Reversal transaction per invariant 6                                                                                                                                                   |
 
 **CDM deviation notes**:
 
@@ -400,3 +400,27 @@ QRL outputs are consumed by the smart contract at execution and stored as part o
 - The `Expected` state (used for anticipated receipts in [cash_payments.md](cash_payments.md)) is not used for FX. FX trades are initiated bilaterally, and the amounts are known at execution; there is no analogous asymmetric receipt-versus-payment distinction.
 
 CDM reference: [Event Model](https://cdm.finos.org/docs/event-model/) · [ForeignExchange product type](https://cdm.finos.org/docs/product-model/) · [FINOS CDM GitHub](https://github.com/finos/common-domain-model)
+
+---
+
+## Implementation
+
+This section binds the FX contract to the [External Message Interface](../implementation.md).
+
+### Inbound
+
+| Family                   | Concrete message(s)                                                                                                                | Window       | Triggers                                                            |
+|--------------------------|------------------------------------------------------------------------------------------------------------------------------------|--------------|---------------------------------------------------------------------|
+| `MarketObservation`      | `Fixing` — NDF fixing rate from the designated source (e.g. PBOC for USD/CNH, RBI for USD/INR)                                     | Point (date) | Net settlement amount: `(Contracted − Fixing) × Notional / Fixing`. |
+| `DateEvent`              | `ScheduledDate` — spot value date, forward value date, near / far value dates (swap), NDF fixing date, NDF settlement date         | —            | Leg settlement; NDF fixing and extinguishment.                      |
+| `OperationalInstruction` | CLS PvP settlement confirmation/failure; correspondent-bank per-leg confirmation/failure (Herstatt); mutual-agreement cancellation | —            | Position-state bucket transitions; netting; termination.            |
+
+No `CorporateAction` is consumed.
+
+### Outbound
+
+| Family               | Concrete message(s)                                                          | CDM projection                      |
+|----------------------|------------------------------------------------------------------------------|-------------------------------------|
+| `Payment`            | Buy-leg cash; sell-leg cash; NDF net settlement (settlement currency)        | `Transfer` (PvP) / `CashTransfer`   |
+| `ProductStateChange` | NDF `Active → Matured → Terminated`; CLS netting (cancel-gross / create-net) | `ContractTermination` / netting `†` |
+| `NewProductTemplate` | None — the NDF is extinguished at maturity, not replicated.                  | —                                   |

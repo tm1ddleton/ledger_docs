@@ -10,6 +10,64 @@ The model generalises to other structures — capital-protected notes, autocalla
 
 ---
 
+## Products in Scope
+
+The structured products in scope (Germany MVP) and their decompositions are listed below. Each note is a **package** of a bond component (governed by [bonds_wip.md](bonds_wip.md)) and one or more option components (governed by [equity_options.md](equity_options.md)); lifecycle events on the components surface to this contract via the QRL observation / event ladder. The template column is the QRL payoff template.
+
+> *Transcribed from the "Products in scope" page; the event matrix below should be confirmed against that page.*
+
+### Catalogue
+
+| Product                          | Decomposition                                                                                                                                     | Template                      |
+|----------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------|
+| Barrier Reverse Convertible      | Long bond + short barrier option (European exercise, continuous barrier monitoring)                                                               | `BarrierRevCon`               |
+| Barrier Reverse Convertible Pro  | Long bond + short barrier option (European exercise, discrete barrier monitoring)                                                                 | `BarrierRevConPro`            |
+| Bonus Certificate                | Zero bond + down-and-in put + plain vanilla call                                                                                                  | `BonusCertificate`            |
+| Capped Bonus Certificate         | Zero bond + down-and-in put (continuous monitoring, European exercise)                                                                            | `CappedBonusCertificate`      |
+| Capped Bonus Pro Certificate     | Zero bond + down-and-in put (discrete monitoring, European exercise)                                                                              | `CappedBonusCertificatePro`   |
+| Capped Warrant                   | Package of two vanilla options                                                                                                                    | `CappedWarrant`               |
+| Discount Certificate             | Long zero bond + short plain vanilla European put                                                                                                 | `DiscountCertificate`         |
+| Knock-Out Warrant                | Down/up-and-out call/put; continuous monitoring; European exercise; fixed expiry                                                                  | `BarrierOption`               |
+| Reverse Capped Bonus Certificate | Long zero bond + 1 vanilla call − 1 up-and-in barrier call (continuous monitoring, European exercise)                                             | `RevCappedBonusCertificate`   |
+| Reverse Convertible              | Long bond + short plain vanilla put                                                                                                               | `ReverseConvertible`          |
+| Option / Warrant (Plain Vanilla) | Plain vanilla European or American option on stock or equity index (HTUB or third-party issuer)                                                   | `Vanilla`                     |
+| Mini Certificate                 | Like Open End Turbo with barrier above/below strike for call/put; continuous barrier; intraday issuance                                           | `BarrierOption` (approx.)     |
+| Open End Turbo                   | Perpetual knock-out warrant (down-and-out / up-and-out), strike = barrier, exercisable for intrinsic value; continuous barrier; intraday issuance | `BarrierOption` (approx.)     |
+| Factor Certificate               | 1:1 tracker of a factor index (index calculation required)                                                                                        | TBD — on hold until clarified |
+
+### Lifecycle-event applicability
+
+`✅` = handled by the lifecycle engine (a QRL-driven lifecycle event this contract processes into moves/payments). `⚠` = impacts lifecycle events but is applied as a **change in product state** — a corporate action on the underlying that feeds through as an R-value / strike / multiplier adjustment via the [Corporate Action Orchestration](../invariants.md#corporate-action-orchestration) model, not as a direct cash move on the note.
+
+| Product                          | Expiry | Coupon | Cont. barrier | Disc. barrier | Exercise   | Dividend | Stock split |
+|----------------------------------|--------|--------|---------------|---------------|------------|----------|-------------|
+| Barrier Reverse Convertible      | ✅      | ✅      | ✅             | —             | European   | ⚠        | ⚠           |
+| Barrier Reverse Convertible Pro  | ✅      | ✅      | —             | ✅             | European   | ⚠        | ⚠           |
+| Bonus Certificate                | ✅      | —      | —             | ✅             | European   | ⚠        | ⚠           |
+| Capped Bonus Certificate         | ✅      | —      | ✅             | —             | European   | ⚠        | ⚠           |
+| Capped Bonus Pro Certificate     | ✅      | —      | —             | ✅             | European   | ⚠        | ⚠           |
+| Capped Warrant                   | ✅      | —      | —             | —             | European   | ⚠        | ⚠           |
+| Discount Certificate             | ✅      | —      | —             | —             | European   | ⚠        | ⚠           |
+| Knock-Out Warrant                | ✅      | —      | ✅             | —             | European   | ⚠        | ⚠           |
+| Reverse Capped Bonus Certificate | ✅      | —      | ✅             | —             | European   | ⚠        | ⚠           |
+| Reverse Convertible              | ✅      | ✅      | —             | —             | European   | ⚠        | ⚠           |
+| Option / Warrant (Plain Vanilla) | ✅      | —      | —             | —             | Euro/Amer  | ⚠        | ⚠           |
+| Mini Certificate                 | ✅      | —      | ✅             | —             | —          | ⚠        | ⚠           |
+| Open End Turbo                   | perp.  | —      | ✅             | —             | continuous | ⚠        | ⚠           |
+| Factor Certificate               | —      | —      | —             | —             | —          | —        | —           |
+
+**Scope notes:**
+
+- **Coupon** applies only to the coupon-bearing reverse convertibles; the certificates are built on **zero** bonds and pay no periodic coupon (their return is delivered at redemption).
+- **Continuous vs discrete barrier** distinguishes continuous (intraday) monitoring from discrete observation-date monitoring — the same distinction as the `barrier.monitoring` field in [equity_options.md](equity_options.md). The "Pro" variants use discrete monitoring. The smart-contract logic is **agnostic** to which is used: the two differ only in the source and timing of the barrier-observation event (a `MarketObservation` Point vs Range), not in the payoff logic, so the continuous/discrete flag matters for the feed, not the breach evaluation. The column is therefore indicative; e.g. the Bonus Certificate is treated here as discrete.
+- **Dividend and stock split are `⚠`** for every equity-underlying note: they are not note-level cash events but corporate actions that re-strike / re-size the embedded option via product state. This is exactly the inbound `CorporateAction` → outbound `ProductStateChange` path in [implementation.md](../implementation.md).
+- **Mini Certificate / Open End Turbo** are modelled as a `BarrierOption` approximation. They are issued intraday on a rolling basis, so barrier monitoring is **issuance-time-aware**: each tranche carries an `issuanceTimestamp` and a continuous-barrier breach affects only units already in existence — see [Issuance-time-aware monitoring](equity_options.md#2-barrier-observation). The Open End Turbo is **perpetual** (no scheduled expiry — it terminates on knock-out).
+- **TBD — daily financing / strike roll (open-end leveraged certificates).** Open-end turbos roll funding cost (and dividends) into the strike (= barrier) on a daily basis; this recurring re-strike is **not yet modelled** and is parked pending a decision on how it will be represented (likely a scheduled product-state `Reset`). Until then these products are covered for issuance, barrier monitoring, and knock-out only.
+- **Factor Certificate** is on hold pending the factor-index calculation and is not yet modelled.
+- **Hedging instruments** referenced on the same scope page — stock, futures, barrier options, IR futures/options, FX cash/option/swap, and SBL — are not structured products; they are governed by their own contracts ([equities.md](equities.md), [futures.md](futures.md), [equity_options.md](equity_options.md), [irs_wip.md](irs_wip.md), [fx_wip.md](fx_wip.md), [stock_borrow_loan_wip.md](stock_borrow_loan_wip.md)).
+
+---
+
 ## Booking Model
 
 Per [invariant 11](../invariants.md#core-ledger-invariants), the booking model is not the responsibility of the smart contract. For the canonical example we assume the simplest case: the note is booked as a single entity on a single internal wallet, and any hedge instruments are also held on that same wallet. Whether a real implementation splits issuance from hedging, routes through an SPV, or distributes through a primary syndicate is a booking decision and does not change the smart contract's lifecycle behaviour.
@@ -39,7 +97,7 @@ The product state for a structured note is the payoff specification. Payoffs may
 
 For the canonical Reverse Convertible, the `payoff` decomposes into:
 
-- A **bond component** specifying the coupon schedule, accrual basis, and principal repayment terms (governed by [bonds.md](bonds.md)).
+- A **bond component** specifying the coupon schedule, accrual basis, and principal repayment terms (governed by [bonds_wip.md](bonds_wip.md)).
 - A **knock-in put option component** specifying the strike, barrier level, observation schedule, and physical-settlement ratio (governed by [equity_options.md](equity_options.md)).
 - A **redemption rule** combining the two: at maturity, deliver cash at par if the put is out of the money (or never knocked in); else deliver shares at the physical settlement ratio.
 
@@ -184,10 +242,34 @@ CDM `TradeState` does not natively express a compound liveliness + last-event ma
 
 ## Relationship to Other Smart Contracts
 
-| Smart Contract  | Relationship                                                                                                                                       |
-|-----------------|----------------------------------------------------------------------------------------------------------------------------------------------------|
-| Bonds           | The bond payoff component is governed by [bonds.md](bonds.md): coupon schedule, accrual, principal repayment                                        |
-| Equity Options  | The option payoff component is governed by [equity_options.md](equity_options.md): barrier monitoring, knock-in observation, physical settlement   |
-| Equities        | Equity delivery at maturity (4b) is a share transfer following [equities.md](equities.md)                                                          |
-| Cash Payments   | Coupon and cash redemption distributions follow [cash_payments.md](cash_payments.md)                                                                |
-| QIS             | A QIS composite unit may serve as the reference underlying of the embedded option; the lifecycle is unchanged                                      |
+| Smart Contract | Relationship                                                                                                                                     |
+|----------------|--------------------------------------------------------------------------------------------------------------------------------------------------|
+| Bonds          | The bond payoff component is governed by [bonds_wip.md](bonds_wip.md): coupon schedule, accrual, principal repayment                             |
+| Equity Options | The option payoff component is governed by [equity_options.md](equity_options.md): barrier monitoring, knock-in observation, physical settlement |
+| Equities       | Equity delivery at maturity (4b) is a share transfer following [equities.md](equities.md)                                                        |
+| Cash Payments  | Coupon and cash redemption distributions follow [cash_payments.md](cash_payments.md)                                                             |
+| QIS            | A QIS composite unit may serve as the reference underlying of the embedded option; the lifecycle is unchanged                                    |
+
+---
+
+## Implementation
+
+This section binds the structured-products contract to the [External Message Interface](../implementation.md).
+
+### Inbound
+
+| Family                   | Concrete message(s)                                                              | Window       | Triggers                                                  |
+|--------------------------|----------------------------------------------------------------------------------|--------------|-----------------------------------------------------------|
+| `MarketObservation`      | `ReferencePrice` — reference equity price on a barrier-observation date          | Point (date) | Barrier-breach evaluation (`barrier_knocked`).            |
+| `MarketObservation`      | `ReferencePrice` — final reference price at maturity                             | Point (date) | Redemption determination (cash at par vs share delivery). |
+| `DateEvent`              | `ScheduledDate` — coupon dates, barrier-observation dates, maturity, inception   | —            | Coupon payment; observation; final settlement.            |
+| `CorporateAction`        | CA on the equity underlying (propagated to the note's CA list via orchestration) | —            | Product-state adjustment of the embedded option leg.      |
+| `OperationalInstruction` | QRL coupon ladder; observation / event ladder                                    | —            | Schedule-driven invocation.                               |
+
+### Outbound
+
+| Family               | Concrete message(s)                                                                                                                                                                                                                                        | CDM projection                                         |
+|----------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------------------------------------------|
+| `Payment`            | Coupon cash; redemption at par; cash residual on share delivery                                                                                                                                                                                            | `InterestPayment` / `CashTransfer`                     |
+| `ProductStateChange` | `Coupon paid` / `Barrier observed` markers; `barrier_knocked` contingent flag; `Active → Matured → Expired`                                                                                                                                                | `BarrierKnockIn` `†` / `ContractTermination`           |
+| `NewProductTemplate` | Note unit at inception. Structured-product **creation** mints three products simultaneously (note + bond + option components) under the `StructuredProductCreationPrimitive`; the component contracts then service their own lifecycles via the QRL ladder | `Execution` (`StructuredProductCreationPrimitive` `†`) |

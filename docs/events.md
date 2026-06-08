@@ -12,17 +12,19 @@ CDM qualifications use `EventQualificationEnum` values unless marked `†` (besp
 
 QRL is the observation / event ladder that drives smart contract invocations. Each smart contract subscribes to events relevant to its product state and is invoked when QRL emits one. The supported QRL event types are:
 
-| Event               | Purpose                                                                                                              |
-|---------------------|----------------------------------------------------------------------------------------------------------------------|
-| `BarrierMonitoring` | A scheduled or continuous-monitoring barrier observation date. Carries the observed reference level. Consumed by smart contracts with barrier features (equity options, structured products) to evaluate breach. |
-| `IndexObservation`  | A scheduled observation of an index, NAV, or basket level (e.g. autocall observation, QIS NAV computation, structured-product observation date). |
-| `StrikeObservation` | An observation that determines or fixes a strike (e.g. forward-start strike fixing, lookback strike determination, average-strike observation contributing to the strike calculation). |
-| `CashPayment`       | A scheduled cash-flow date (coupon, dividend record date, fixed leg payment, principal redemption). Triggers the smart contract to compute and book the cash move per [cash_payments.md](smart_contracts/cash_payments.md). |
-| `Termination`       | A scheduled or triggered contract-termination event (expiry, maturity, exercise, knock-out). Drives the unit-state liveliness transition `Active → Matured` and the creation of any final settlement transaction. |
-| `PhysicalDelivery`  | The settlement leg of a physically-settled contract (option exercise, futures physical delivery, structured-product share redemption). Triggers the smart contract to book the underlying delivery and any associated cash payment. |
+| Event               | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+|---------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `BarrierMonitoring` | A scheduled or continuous-monitoring barrier observation date. Carries the observed reference level. Consumed by smart contracts with barrier features (equity options, structured products) to evaluate breach. For continuously-issued products (open-end turbos, mini certificates) breach evaluation is **issuance-time-aware** — a breach affects only units issued before it (see [equity_options.md](smart_contracts/equity_options.md#2-barrier-observation)).  |
+| `IndexObservation`  | A scheduled observation of an index, NAV, or basket level (e.g. autocall observation, QIS NAV computation, structured-product observation date).                                                                                                                                                                                                                                                                                                                        |
+| `StrikeObservation` | An observation that determines or fixes a strike (e.g. forward-start strike fixing, lookback strike determination, average-strike observation contributing to the strike calculation).                                                                                                                                                                                                                                                                                  |
+| `CashPayment`       | A scheduled cash-flow date (coupon, dividend record date, fixed leg payment, principal redemption). Triggers the smart contract to compute and book the cash move per [cash_payments.md](smart_contracts/cash_payments.md).                                                                                                                                                                                                                                             |
+| `Termination`       | A scheduled or triggered contract-termination event (expiry, maturity, exercise, knock-out). Drives the unit-state liveliness transition `Active → Matured` and the creation of any final settlement transaction.                                                                                                                                                                                                                                                       |
+| `PhysicalDelivery`  | The settlement leg of a physically-settled contract (option exercise, futures physical delivery, structured-product share redemption). Triggers the smart contract to book the underlying delivery and any associated cash payment.                                                                                                                                                                                                                                     |
 | `CorporateAction`   | An ISIN-level corporate action ready for application. Payload carries the per-listing adjustment values (R-values, cash amounts, deliverable substitutions, withholding rates) and the action type (split, dividend, scrip, rights, spin-off, etc.). Triggers atomic application across all subscribed positions per [invariant 12](invariants.md#core-ledger-invariants) and the [Corporate Action Orchestration](invariants.md#corporate-action-orchestration) model. |
 
 Per [invariant 10](invariants.md#core-ledger-invariants), each event is delivered idempotently: replays are no-ops by virtue of the unit state's last-lifecycle-event marker.
+
+QRL is the *internal router*. The *external* messages that QRL normalises into these events — the inbound `CorporateAction`, `DateEvent`, and `MarketObservation` families, and the outbound `Payment`, `ProductStateChange`, and `NewProductTemplate` families — are defined in [implementation.md](implementation.md). The CDM qualifications catalogued in the [CDM Event Reference](#cdm-event-reference) below are what the outbound `ProductStateChange` messages project onto.
 
 ---
 
@@ -58,19 +60,19 @@ A single cash dividend on one equity is a position-grained event, but it down-al
 
 ## Contract Abbreviations
 
-| Abbr | Smart Contract                                                               |
-|------|------------------------------------------------------------------------------|
-| Eq   | [Cash Equities](smart_contracts/equities.md)                                 |
-| Fut  | [Futures](smart_contracts/futures.md)                                        |
-| Fund | [Internal Treasury Funding](smart_contracts/funding.md)                      |
-| Opt  | [Equity Options](smart_contracts/equity_options.md)                          |
-| Bond | [Bonds](smart_contracts/bonds.md)                                            |
-| FX   | [FX — Spot, Forward, Swap, NDF](smart_contracts/fx.md)                       |
-| IRS  | [Interest Rate Swaps](smart_contracts/irs.md)                                |
-| QIS  | [Quantitative Investment Strategies](smart_contracts/qis.md)                 |
-| SP   | [Structured Products](smart_contracts/structured_products.md)                |
-| Cash | [Standalone Cash Payments](smart_contracts/cash_payments.md)                 |
-| SBL  | [Stock Borrow / Loan](smart_contracts/stock_borrow_loan.md)                  |
+| Abbr | Smart Contract                                                   |
+|------|------------------------------------------------------------------|
+| Eq   | [Cash Equities](smart_contracts/equities.md)                     |
+| Fut  | [Futures](smart_contracts/futures.md)                            |
+| Fund | [Internal Treasury Funding](smart_contracts/funding.md)          |
+| Opt  | [Equity Options](smart_contracts/equity_options.md)              |
+| Bond | [Bonds](smart_contracts/bonds_wip.md)                            |
+| FX   | [FX — Spot, Forward, Swap, NDF](smart_contracts/fx_wip.md)       |
+| IRS  | [Interest Rate Swaps](smart_contracts/irs_wip.md)                |
+| QIS  | [Quantitative Investment Strategies](smart_contracts/qis_wip.md) |
+| SP   | [Structured Products](smart_contracts/structured_products.md)    |
+| Cash | [Standalone Cash Payments](smart_contracts/cash_payments.md)     |
+| SBL  | [Stock Borrow / Loan](smart_contracts/stock_borrow_loan_wip.md)  |
 
 ---
 
@@ -297,29 +299,29 @@ A single cash dividend on one equity is a position-grained event, but it down-al
 
 ### Termination and Maturity
 
-| Event                                      | CDM Qualification                            | Ext | Initial Move State / Notes                                   |
-|--------------------------------------------|----------------------------------------------|-----|--------------------------------------------------------------|
-| Maturity (scheduled; final payment)        | — (final coupon; no special qualification)   |     | Existing `Expected` moves advance through payment state flow |
-| SBL Maturity / Loan Termination            | `ContractTermination`                        |     | Securities return `Pending`; collateral release `Expected`; final fee `Expected`/`Pending` |
-| Futures Expiry — Cash Settlement           | `ContractTermination`                        |     | Extinguishment `Pending`; final VM `Expected`                |
-| Futures Expiry — Physical Delivery         | `ContractTermination`                        |     | Per underlying contract (equities.md / bonds.md)             |
-| Futures Position Close                     | `Execution` (offsetting trade)               |     | `Settled` (futures unit); updates `costBasis` and `N`        |
-| NDF Maturity / Unit Extinguishment         | `ContractTermination`                        |     | `Pending`; NDF state `Active → Matured → Terminated`         |
-| FX Early Termination (pre-settlement)      | —                                            |     | `Pending` / `Instructed → Failed`; no reversal               |
-| Bond — Early Redemption by Issuer (Call)   | `EarlyTerminationProvision`                  |     | Bond return `Instructed`; redemption cash `Expected`         |
-| Bond — Early Redemption by Holder (Put)    | `OptionalEarlyTermination`                   |     | Same move structure as call redemption                       |
-| Bond Conversion (Convertible)              | `ConversionFeature`                          |     | Bond units extinguished `Instructed`; equity units created   |
-| Bond Sale (Secondary Market)               | `Execution`                                  |     | `Instructed` (exchange) / `Pending` (OTC)                    |
-| Issuer Default                             | —                                            |     | All outstanding `Expected` / `Instructed` income → `Failed`  |
-| Partial Return / Partial Termination       | `QuantityChange` / `QuantityChangePrimitive` |     | Future `Expected` → `Failed` (IRS/Fund); proportional collateral release (SBL) |
-| Full Termination / Early Break             | `Termination` / `ContractTermination`        |     | Future `Expected` → `Failed`; termination / final payment `Pending` |
-| Recall (lender-initiated)                  | `RecallEvent`                                | †   | State event on recall date; settlement moves `Pending` / `Expected` with recall date |
-| Collateral Substitution                    | `CollateralSubstitutionEvent`                | †   | New collateral `Pending`; old collateral `Expected`; atomic DvD |
-| Funding Termination (book closed)          | `ContractTermination`                        |     | Residual notional `Pending`; accrued interest `Expected`     |
-| Composite Unit Redemption                  | `Transfer` / `ContractTermination`           |     | Units `Instructed`; redemption cash `Expected` (funded) / `Pending` (unfunded loss) |
-| Strategy Termination                       | `ContractTermination`                        |     | Simulated wallet unwound; all units retired                  |
-| Note Redemption — Cash                     | `ContractTermination`                        |     | `Expected → Settled`; all three product `TradeState`s closed |
-| Note Redemption — Physical (share delivery)| `OptionExercise` + `ContractTermination`     | †   | `NotePhysicalRedemptionEvent`; shares `Pending`; bond principal internal |
+| Event                                       | CDM Qualification                            | Ext | Initial Move State / Notes                                                                 |
+|---------------------------------------------|----------------------------------------------|-----|--------------------------------------------------------------------------------------------|
+| Maturity (scheduled; final payment)         | — (final coupon; no special qualification)   |     | Existing `Expected` moves advance through payment state flow                               |
+| SBL Maturity / Loan Termination             | `ContractTermination`                        |     | Securities return `Pending`; collateral release `Expected`; final fee `Expected`/`Pending` |
+| Futures Expiry — Cash Settlement            | `ContractTermination`                        |     | Extinguishment `Pending`; final VM `Expected`                                              |
+| Futures Expiry — Physical Delivery          | `ContractTermination`                        |     | Per underlying contract (equities.md / bonds_wip.md)                                       |
+| Futures Position Close                      | `Execution` (offsetting trade)               |     | `Settled` (futures unit); updates `costBasis` and `N`                                      |
+| NDF Maturity / Unit Extinguishment          | `ContractTermination`                        |     | `Pending`; NDF state `Active → Matured → Terminated`                                       |
+| FX Early Termination (pre-settlement)       | —                                            |     | `Pending` / `Instructed → Failed`; no reversal                                             |
+| Bond — Early Redemption by Issuer (Call)    | `EarlyTerminationProvision`                  |     | Bond return `Instructed`; redemption cash `Expected`                                       |
+| Bond — Early Redemption by Holder (Put)     | `OptionalEarlyTermination`                   |     | Same move structure as call redemption                                                     |
+| Bond Conversion (Convertible)               | `ConversionFeature`                          |     | Bond units extinguished `Instructed`; equity units created                                 |
+| Bond Sale (Secondary Market)                | `Execution`                                  |     | `Instructed` (exchange) / `Pending` (OTC)                                                  |
+| Issuer Default                              | —                                            |     | All outstanding `Expected` / `Instructed` income → `Failed`                                |
+| Partial Return / Partial Termination        | `QuantityChange` / `QuantityChangePrimitive` |     | Future `Expected` → `Failed` (IRS/Fund); proportional collateral release (SBL)             |
+| Full Termination / Early Break              | `Termination` / `ContractTermination`        |     | Future `Expected` → `Failed`; termination / final payment `Pending`                        |
+| Recall (lender-initiated)                   | `RecallEvent`                                | †   | State event on recall date; settlement moves `Pending` / `Expected` with recall date       |
+| Collateral Substitution                     | `CollateralSubstitutionEvent`                | †   | New collateral `Pending`; old collateral `Expected`; atomic DvD                            |
+| Funding Termination (book closed)           | `ContractTermination`                        |     | Residual notional `Pending`; accrued interest `Expected`                                   |
+| Composite Unit Redemption                   | `Transfer` / `ContractTermination`           |     | Units `Instructed`; redemption cash `Expected` (funded) / `Pending` (unfunded loss)        |
+| Strategy Termination                        | `ContractTermination`                        |     | Simulated wallet unwound; all units retired                                                |
+| Note Redemption — Cash                      | `ContractTermination`                        |     | `Expected → Settled`; all three product `TradeState`s closed                               |
+| Note Redemption — Physical (share delivery) | `OptionExercise` + `ContractTermination`     | †   | `NotePhysicalRedemptionEvent`; shares `Pending`; bond principal internal                   |
 
 ### QIS Rebalancing
 
@@ -355,7 +357,7 @@ Cash dividends, stock splits, reverse stock splits, and scrip dividends are now 
 
 ### 2. SBL CDM Coverage — Partial
 
-CDM v5 covers approximately two-thirds of GMSLA lifecycle events. Four bespoke extensions are required for this implementation (`MarkToMarketCollateralCall`, `RecallEvent`, `ManufacturedPaymentEvent`, `CollateralSubstitutionEvent`) — see [stock_borrow_loan.md](smart_contracts/stock_borrow_loan.md) §CDM Extensions. The ISLA CDM Working Group is actively developing the remaining coverage; extensions should be reviewed against future CDM releases as they are merged.
+CDM v5 covers approximately two-thirds of GMSLA lifecycle events. Four bespoke extensions are required for this implementation (`MarkToMarketCollateralCall`, `RecallEvent`, `ManufacturedPaymentEvent`, `CollateralSubstitutionEvent`) — see [stock_borrow_loan_wip.md](smart_contracts/stock_borrow_loan_wip.md) §CDM Extensions. The ISLA CDM Working Group is actively developing the remaining coverage; extensions should be reviewed against future CDM releases as they are merged.
 
 ### 3. Core Invariants — All Verified Compliant
 

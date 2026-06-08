@@ -148,7 +148,7 @@ Two funding structures are supported:
 | Composite unit issuance | Composite Unit Issuance Pool | Investor / Desk Book | N composite units                       | `Instructed → Settled` |
 | Subscription cash       | Investor / Desk Book         | Cash Account         | Cash (N × NAV per unit at dealing date) | `Pending → Settled`    |
 
-**Unfunded**: the investor gains exposure without paying upfront capital (e.g. via a TRS or unfunded structured note). The composite unit is issued to the desk book as a hedge; the investor's obligation is governed by the overlying product smart contract (see [irs.md](irs.md), [structure_products.md](structure_products.md)). No subscription cash move is created at issuance. Settlement at termination is covered in §7.
+**Unfunded**: the investor gains exposure without paying upfront capital (e.g. via a TRS or unfunded structured note). The composite unit is issued to the desk book as a hedge; the investor's obligation is governed by the overlying product smart contract (see [irs_wip.md](irs_wip.md), [structured_products.md](structured_products.md)). No subscription cash move is created at issuance. Settlement at termination is covered in §7.
 
 | Move                    | From                         | To             | Asset             | State                  |
 |-------------------------|------------------------------|----------------|-------------------|------------------------|
@@ -355,12 +355,12 @@ For constituent-based indices, the divisor maintains index-level continuity acro
 
 ## Relationship to Other Smart Contracts
 
-| Product                          | Relationship                                                                                          |
-|----------------------------------|-------------------------------------------------------------------------------------------------------|
-| Total Return Swap (TRS) on QIS   | The TRS references composite units as the underlying; the TRS payer receives the total return on the composite unit. Coupon payments per [irs.md](irs.md). |
-| Structured note referencing QIS  | The note's redemption amount is linked to composite unit NAV at maturity; structured per [structure_products.md](structure_products.md) |
-| Equity futures on index          | The futures price references the constituent-based index level; futures lifecycle per [futures.md](futures.md) |
-| Cash dividend income             | Constituent dividends in Model A simulated wallets follow [cash_payments.md](cash_payments.md)        |
+| Product                         | Relationship                                                                                                                                                       |
+|---------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Total Return Swap (TRS) on QIS  | The TRS references composite units as the underlying; the TRS payer receives the total return on the composite unit. Coupon payments per [irs_wip.md](irs_wip.md). |
+| Structured note referencing QIS | The note's redemption amount is linked to composite unit NAV at maturity; structured per [structured_products.md](structured_products.md)                          |
+| Equity futures on index         | The futures price references the constituent-based index level; futures lifecycle per [futures.md](futures.md)                                                     |
+| Cash dividend income            | Constituent dividends in Model A simulated wallets follow [cash_payments.md](cash_payments.md)                                                                     |
 
 ---
 
@@ -373,3 +373,28 @@ For constituent-based indices, the divisor maintains index-level continuity acro
 | Roll execution fails (return-stream unit)             | Old return-stream unit remains in simulated wallet; lifecycle engine retries on next eligible roll date; no `Failed` state (simulated wallet moves do not follow the two-tier settlement model — they are always `Settled` immediately) |
 | Lifecycle engine produces inconsistent target weights | Transaction blocked at smart contract layer; requires lifecycle engine correction and resubmission; no partial rebalancing written |
 | Composite unit redemption cash fails                  | Two-tier model per [invariant 8](../invariants.md#core-ledger-invariants); composite unit returned to issuance pool pending cash settlement |
+
+---
+
+## Implementation
+
+This section binds the QIS contract to the [External Message Interface](../implementation.md).
+
+### Inbound
+
+| Family                   | Concrete message(s)                                                                                                                    | Window                        | Triggers                                                       |
+|--------------------------|----------------------------------------------------------------------------------------------------------------------------------------|-------------------------------|----------------------------------------------------------------|
+| `MarketObservation`      | Constituent prices, one per fixing date (Model A)                                                                                      | Point (date) ×N               | Index-level / NAV computation; rebalancing valuation.          |
+| `MarketObservation`      | Return-stream fixings (Model B); roll-window returns                                                                                   | Point (date) / Range          | Return accrual; roll mechanics.                                |
+| `MarketObservation`      | `NAV` / `IndexLevel` — composite level, incl. TWAP/VWAP execution windows                                                              | Point or Range (date + times) | Unit NAV update; rebalancing execution.                        |
+| `DateEvent`              | `ScheduledDate` — rebalancing dates, fixing dates, ex-dividend & dividend dates (Model A), dealing dates, strategy end / early wind-up | —                             | Rebalance; income accrual; redemption; termination.            |
+| `CorporateAction`        | CA on basket constituents (Model A) → divisor adjustment; index deletion                                                               | —                             | Divisor / composition adjustment to preserve index continuity. |
+| `OperationalInstruction` | Lifecycle-engine outputs (target composition, new NAV, roll mechanics); dividend accruals from index manager                           | —                             | Constituent/notional moves in the simulated wallet.            |
+
+### Outbound
+
+| Family               | Concrete message(s)                                                                                                                          | CDM projection                                                      |
+|----------------------|----------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------|
+| `Payment`            | Dividend accrual cash (Model A); composite-unit subscription / redemption cash; settlement on unfunded terminations; divisor-adjustment cash | `Transfer` / `CashTransfer`                                         |
+| `ProductStateChange` | NAV / index-level updates; `PortfolioState` transition on each rebalancing; strategy termination                                             | `Observation` + `Reset` / `Rebalancing` `†` / `ContractTermination` |
+| `NewProductTemplate` | Composite unit on strategy inception (simulated wallet populated); composite-unit issuance is a new position, not a new template             | `Execution` / `Transfer`                                            |
